@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+  - apps/*
+onlyBuiltDependencies:
+  - esbuild
+  - node-pty
+  - "@node-rs/argon2"
