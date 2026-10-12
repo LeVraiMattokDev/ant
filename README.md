@@ -96,7 +96,7 @@ n'a pas été ajouté : vérifie le contenu de `/etc/apt/sources.list.d/docker.l
 ## 4. Récupérer Ant et préparer la configuration
 
 ```bash
-sudo mkdir -p /opt/ant && sudo chown "$USER" /opt/ant
+mkdir -p /opt/ant
 git clone https://github.com/LeVraiMattokDev/ant.git /opt/ant
 cd /opt/ant
 ./deploy/generate-env.sh       # crée .env (droits 600) avec des secrets aléatoires
@@ -165,9 +165,9 @@ Les migrations de la base s'appliquent automatiquement au démarrage.
 Active le script d'isolation : les conteneurs peuvent sortir sur Internet, mais pas vers ton LAN ni vers la VM.
 
 ```bash
-sudo cp deploy/ant-firewall.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ant-firewall
+cp deploy/ant-firewall.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now ant-firewall
 ```
 
 Vérification :
