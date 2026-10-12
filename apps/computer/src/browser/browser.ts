@@ -77,6 +77,8 @@ export class BrowserManager {
       ...(this.cfg.browserExecutablePath ? { executablePath: this.cfg.browserExecutablePath } : {}),
       viewport: { ...VIEWPORT },
       args: ['--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage'],
+      // No « controlled by automated test software » banner (it covers the page and some sites react to it).
+      ignoreDefaultArgs: ['--enable-automation'],
       // Minimal environment: the browser (exposed to the web) never sees the service's secrets.
       env: agentEnv(this.cfg, { XDG_CONFIG_HOME: `${this.cfg.agentHome}/.config`, XDG_CACHE_HOME: `${this.cfg.agentHome}/.cache` }),
       handleSIGINT: false,

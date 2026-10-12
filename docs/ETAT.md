@@ -28,9 +28,17 @@ Ce document dit ce qui est fait, comment c'est vérifié, et ce qui reste limit�
   - Parcours complet par l'API : configuration, TOTP, refus du WebSocket sans session, création de bot, message, pause faute d'identifiants.
   - **Image Docker de production** (lecture seule, sans capacités Linux) : le binaire Claude Code de l'Agent SDK démarre, joint l'API d'Anthropic, et un identifiant refusé est détecté et géré.
   - **Image de l'ordinateur** avec le durcissement de docker-compose : Chromium sur écran virtuel, commandes en utilisateur non privilégié sans secret, VNC, terminal.
+  - **Interface réelle contre le vrai serveur**, dans un Chromium headless :
+    - parcours de configuration complet (jeton, mot de passe, TOTP, codes de secours) ;
+    - message à un bot, puis affichage de la pause et de sa raison ;
+    - tous les écrans parcourus sur ordinateur et sur mobile (390 px), sans erreur de console ni violation de CSP.
+  - **Vue Ordinateur en direct** à travers le proxy authentifié du serveur : l'écran noVNC montre le Chromium de l'agent, et le terminal tmux partagé est connecté.
 
 ## Ce qui n'a pas pu être vérifié ici
 
+- **Construction complète de l'image serveur avec l'interface** : interrompue ici par une limite de requêtes de Docker Hub (429).
+  L'image serveur a été construite et démarrée sans l'étape de l'interface, et cette étape (`pnpm --filter @ant/ui build`)
+  passe à l'identique en local. Sur ta VM, `docker compose build` exécute l'ensemble.
 - **Appels réels à Claude avec ton abonnement ou ta clé API** : aucun identifiant valide n'existe dans l'environnement de développement.
   L'intégration est vérifiée jusqu'à l'API d'Anthropic (refus d'une fausse clé), mais pas une vraie réponse de modèle.
   À tester en premier après déploiement : un message à un bot, puis l'écran Quota & budget.

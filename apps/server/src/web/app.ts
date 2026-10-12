@@ -75,6 +75,7 @@ export async function buildApp(deps: WebDeps, opts: { serveUi?: boolean; rpc?: P
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
+        upgradeInsecureRequests: origin.protocol === 'https:' ? [] : null,
       },
     },
     crossOriginEmbedderPolicy: false,
