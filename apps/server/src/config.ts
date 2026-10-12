@@ -24,7 +24,7 @@ const webSchema = baseSchema.extend({
   ENCRYPTION_KEY: z.string().min(32, 'ENCRYPTION_KEY doit contenir au moins 32 caractères'),
   SETUP_TOKEN: optionalSecret,
   UI_DIST: z.string().default(new URL('../../ui/dist', import.meta.url).pathname),
-  /** Trust X-Forwarded-For from the reverse proxy (Nginx Proxy Manager). */
+  /** Trust X-Forwarded-For: 'true', 'false', or the IP/CIDR of Nginx Proxy Manager (recommended). */
   TRUST_PROXY: z.string().default('true'),
   SESSION_IDLE_HOURS: z.coerce.number().default(12),
   SESSION_ABSOLUTE_DAYS: z.coerce.number().default(30),

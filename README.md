@@ -187,6 +187,8 @@ Autres protections en place :
   client_max_body_size 5m;
   ```
 
+Dans `.env`, mets `TRUST_PROXY=<IP de NPM>` pour que seule l'adresse transmise par NPM soit prise en compte (limitation des tentatives par IP).
+
 `PUBLIC_ORIGIN` dans `.env` doit être exactement `https://ant.mondomaine.ch`. Les passkeys, les cookies sécurisés et la
 vérification d'origine en dépendent.
 

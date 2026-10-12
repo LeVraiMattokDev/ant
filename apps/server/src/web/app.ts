@@ -33,6 +33,17 @@ declare module 'fastify' {
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/**
+ * `true` trusts any proxy (fine only when the port is reachable from NPM alone, see the Proxmox firewall);
+ * an IP / CIDR list trusts only those proxies for X-Forwarded-For (recommended: NPM's IP).
+ */
+export function trustProxySetting(value: string): boolean | string {
+  const v = value.trim();
+  if (v === 'true') return true;
+  if (v === 'false' || v === '') return false;
+  return v;
+}
+
 export interface BuiltApp {
   app: FastifyInstance;
   hub: RealtimeHub;
@@ -41,7 +52,7 @@ export interface BuiltApp {
 export async function buildApp(deps: WebDeps, opts: { serveUi?: boolean; rpc?: Parameters<typeof routineRoutes>[2] } = {}): Promise<BuiltApp> {
   const app = Fastify({
     loggerInstance: logger as unknown as FastifyBaseLogger,
-    trustProxy: deps.cfg.TRUST_PROXY === 'true',
+    trustProxy: trustProxySetting(deps.cfg.TRUST_PROXY),
     bodyLimit: 2 * 1024 * 1024,
     disableRequestLogging: true,
   });
