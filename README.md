@@ -39,10 +39,10 @@ deploy/         Pare-feu, sauvegardes, génération du .env
    - CPU : 4 cœurs, type `host`.
    - Mémoire : 8192 Mo.
    - Réseau : pont `vmbr0`, modèle `VirtIO`, **case « Pare-feu » cochée**.
-3. Installe Debian (installation minimale + « serveur SSH », sans environnement de bureau), puis :
+3. Installe Debian (installation minimale + « serveur SSH », sans environnement de bureau), puis, en root :
    ```bash
-   sudo apt update && sudo apt install -y qemu-guest-agent git openssl curl
-   sudo systemctl enable --now qemu-guest-agent
+   apt update && apt install -y qemu-guest-agent git openssl curl
+   systemctl enable --now qemu-guest-agent
    ```
 4. Donne une **adresse IP fixe** à la VM (réservation DHCP sur ton routeur ou `/etc/network/interfaces`).
 
@@ -70,16 +70,28 @@ Adapte les règles si ton LAN utilise d'autres plages. Ce pare-feu s'ajoute à l
 
 ## 3. Installer Docker sur la VM
 
+Commandes à lancer **en root** (`su -`). Une Debian minimale n'a souvent ni `sudo` ni `gpg`, et ces commandes n'en ont pas besoin :
+
 ```bash
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-  | sudo tee /etc/apt/sources.list.d/docker.list
-sudo apt update && sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo usermod -aG docker "$USER"   # puis déconnexion / reconnexion
+apt update && apt install -y ca-certificates curl git openssl
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+. /etc/os-release
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" \
+  > /etc/apt/sources.list.d/docker.list
+apt update
+apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+docker run --rm hello-world   # vérification
 ```
 
----
+`$ID` vaut `debian` ou `ubuntu` selon le système. Si `apt install` répond « has no installation candidate », c'est que le dépôt
+n'a pas été ajouté : vérifie le contenu de `/etc/apt/sources.list.d/docker.list` et la sortie de `apt update`.
+
+> **Conteneur LXC au lieu d'une VM ?** C'est possible, mais déconseillé. L'ordinateur des agents fait tourner un navigateur exposé
+> au web : dans une VM, il est isolé par un noyau séparé ; dans un LXC, il partage le noyau de l'hôte Proxmox. Si tu gardes un LXC,
+> active **Options → Fonctionnalités → Imbrication et keyctl** (`pct set <id> --features nesting=1,keyctl=1` sur l'hôte),
+> redémarre le conteneur, puis installe Docker comme ci-dessus.
 
 ## 4. Récupérer Ant et préparer la configuration
 
