@@ -1,0 +1,159 @@
+# Ant — déploiement sur la VM Debian (voir README.md).
+# Seul le service `web` est publié ; Nginx Proxy Manager termine le HTTPS devant lui.
+name: ant
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  postgres:
+    <<: *hardening
+    image: postgres:17-alpine
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    environment:
+      POSTGRES_DB: ant
+      POSTGRES_USER: ant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD manquant}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ant -d ant"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    image: ant-server:local
+    command: ["node", "dist/web.js"]
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      ANT_SERVICE: web
+      DATABASE_URL: postgres://ant:${POSTGRES_PASSWORD}@postgres:5432/ant
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN manquant}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY manquant}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      COMPUTER_URL: http://computer:7000
+      COMPUTER_RPC_TOKEN: ${COMPUTER_RPC_TOKEN:?COMPUTER_RPC_TOKEN manquant}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@localhost}
+      TZ: ${TZ:-Europe/Zurich}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${ANT_BIND_ADDRESS:-0.0.0.0}:${ANT_PORT:-8080}:8080"
+    networks: [front, internal, sandbox]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    <<: *hardening
+    image: ant-server:local
+    command: ["node", "dist/worker.js"]
+    read_only: true
+    tmpfs: [/tmp, /home/node]
+    environment:
+      ANT_SERVICE: worker
+      DATABASE_URL: postgres://ant:${POSTGRES_PASSWORD}@postgres:5432/ant
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN}
+      # Identifiants Claude : uniquement dans ce service. Voir README § « Connexion à Claude ».
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      COMPUTER_URL: http://computer:7000
+      COMPUTER_RPC_TOKEN: ${COMPUTER_RPC_TOKEN}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@localhost}
+      TZ: ${TZ:-Europe/Zurich}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - claude-state:/data
+    networks: [internal, egress, sandbox]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      web:
+        condition: service_started
+    stop_grace_period: 40s
+
+  computer:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: apps/computer/Dockerfile
+    image: ant-computer:local
+    environment:
+      COMPUTER_RPC_TOKEN: ${COMPUTER_RPC_TOKEN}
+      TZ: ${TZ:-Europe/Zurich}
+    volumes:
+      - workspace:/workspace
+      - browser-profile:/home/agent/.ant-browser
+    networks: [sandbox]
+    shm_size: 1gb
+    pids_limit: 1024
+    mem_limit: ${COMPUTER_MEMORY:-3g}
+    cpus: ${COMPUTER_CPUS:-2}
+
+  backup:
+    <<: *hardening
+    image: postgres:17-alpine
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ant
+      PGDATABASE: ant
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+      TZ: ${TZ:-Europe/Zurich}
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  claude-state:
+  workspace:
+  browser-profile:
+
+networks:
+  # Publication du port web (vers Nginx Proxy Manager).
+  front:
+    driver_opts:
+      com.docker.network.bridge.name: ant-front
+  # Base de données : aucun accès extérieur.
+  internal:
+    internal: true
+  # Sortie Internet du worker (API Anthropic).
+  egress:
+    driver_opts:
+      com.docker.network.bridge.name: ant-egress
+  # Réseau de l'ordinateur des agents : Internet oui, réseau local non (deploy/ant-firewall.sh).
+  sandbox:
+    driver_opts:
+      com.docker.network.bridge.name: ant-sandbox

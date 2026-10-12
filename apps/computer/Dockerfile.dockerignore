@@ -1,0 +1,12 @@
+# Contexte = racine du dépôt ; seuls les fichiers utiles à apps/computer sont envoyés.
+**/node_modules
+**/dist
+**/coverage
+**/*.log
+.git
+.env
+.env.*
+apps/server
+apps/ui
+deploy
+docs

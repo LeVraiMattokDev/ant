@@ -29,7 +29,8 @@ export function computerTools(rc: RunContext) {
         {
           command: z.string().min(1).max(20_000),
           cwd: z.string().optional().describe('Dossier relatif à /workspace'),
-          timeout_sec: z.number().int().min(1).max(1800).optional().describe('Défaut 120 s'),
+          // Node's fetch waits at most 300 s for response headers: longer jobs go to the background.
+          timeout_sec: z.number().int().min(1).max(280).optional().describe('Défaut 120 s, maximum 280 s. Pour plus long, lance en arrière-plan (nohup … > /workspace/log.txt &) puis consulte le journal.'),
         },
         async (args) =>
           guarded(async () => {

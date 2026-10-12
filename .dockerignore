@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/dev-dist
+**/coverage
+.git
+.env
+.env.*
+!.env.example
+backups
+*.log

@@ -1,7 +1,6 @@
 # Ant — Proposition d'architecture (v0, à valider)
 
-> Statut : **proposition, aucun code applicatif écrit**. Ce document attend ta validation
-> (voir « Questions ouvertes » en fin de document) avant le démarrage de la phase 1.
+> Statut : **validé et implémenté**. Les écarts avec la proposition initiale sont signalés « (implémentation) ».
 
 Sommaire
 1. [Vérifications faites dans la documentation officielle](#1-vérifications-faites-dans-la-documentation-officielle)
@@ -41,7 +40,7 @@ Vérifié le 2026-10-12, dans les typages du paquet officiel `@anthropic-ai/clau
 | Réflexion | Sonnet/Opus/Haiku 5.5 : réflexion adaptative toujours active, on règle la profondeur via l'effort | Doc modèles |
 | Sous-agents | option `agents: Record<string, AgentDefinition>` ; `model` accepte un alias ou un **identifiant complet** ; `effort`, `tools`, `prompt`, `maxTurns` par sous-agent | `sdk.d.ts` |
 | Limites d'abonnement | événement de flux `rate_limit_event` → `status: allowed \| allowed_warning \| rejected`, `rateLimitType: five_hour \| seven_day \| …`, `utilization`, `resetsAt` | `sdk.d.ts` (`SDKRateLimitEvent`) |
-| Utilisation détaillée (5 h / 7 j) | `Query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()` → `five_hour`, `seven_day`, `utilization`, `resets_at` | `sdk.d.ts` — **expérimental**, utilisé en bonus seulement |
+| Utilisation détaillée (5 h / 7 j) | `Query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()` → `five_hour`, `seven_day`, `utilization`, `resets_at` | `sdk.d.ts` — **expérimental** : non utilisé par Ant (instable), les événements `rate_limit_event` suffisent |
 | Erreur de limite | message assistant avec `error: 'rate_limit'` | `sdk.d.ts` (`SDKAssistantMessageError`) |
 | Coût | `total_cost_usd` dans le message `result` (« estimation, pas une facture ») + `modelUsage` par modèle | `sdk.d.ts` |
 | Plafond par exécution | option `maxBudgetUsd` → résultat `error_max_budget_usd` | `sdk.d.ts` |
@@ -65,7 +64,7 @@ Vérifié le 2026-10-12, dans les typages du paquet officiel `@anthropic-ai/clau
 ┌───────────────────▼──────────────────────────── VM Debian « ant » (Proxmox) ─┐
 │  docker compose                                                               │
 │                                                                               │
-│  ┌──────────┐  WS/HTTP  ┌──────────┐   jobs (pg-boss)   ┌──────────┐          │
+│  ┌──────────┐  WS/HTTP  ┌──────────┐   jobs (Postgres)  ┌──────────┐          │
 │  │   web    │◄─────────►│ postgres │◄──────────────────►│  worker  │──► API   │
 │  │ API+SPA  │  LISTEN/  └──────────┘                    │ Agent SDK│   Claude │
 │  │  + WS    │  NOTIFY        ▲ réseau interne seul      │ planif.  │          │
@@ -85,7 +84,7 @@ Vérifié le 2026-10-12, dans les typages du paquet officiel `@anthropic-ai/clau
 | Agents | `@anthropic-ai/claude-agent-sdk` (version épinglée) | demandé ; boucle d'agent, sous-agents, hooks, cache, compaction fournis |
 | API web | Fastify 5 + `@fastify/websocket` + Zod | rapide, typé, schémas validés |
 | Base | PostgreSQL 17 + Drizzle ORM (migrations versionnées) | relationnel, recherche plein texte native (`french` + `unaccent`), LISTEN/NOTIFY pour le temps réel |
-| File de tâches / planif | **pg-boss** (dans Postgres) | jobs persistants, reprises, cron, concurrence, « singleton » par bot — pas de Redis à opérer |
+| File de tâches / planif | File maison dans Postgres (`FOR UPDATE SKIP LOCKED`, « couloirs » par bot et fil, clés de déduplication) — (implémentation : remplace pg-boss, plus simple à tester et sans dépendance) | jobs persistants, reprises avec backoff, report sans consommer d'essai, pas de Redis à opérer |
 | Front | React 19 + Vite + TanStack Router/Query + Tailwind + Radix | SPA rapide, PWA via `vite-plugin-pwa` |
 | Temps réel | WebSocket (bidirectionnel : flux de tokens, prise de main sur l'ordinateur) | |
 | Push | Web Push (VAPID, lib `web-push`) | pas de service tiers |
@@ -149,7 +148,7 @@ Une **exécution** (`run`) = un appel `query()` de l'Agent SDK pour un bot, dans
 message utilisateur / @mention / transfert / heartbeat / routine / validation accordée
         │
         ▼
-  pg-boss job "bot-run" (singletonKey = bot+fil → un seul run à la fois par bot et par fil)
+  job "bot.run" (couloir = bot+fil → un seul run à la fois par bot et par fil)
         │
         ▼
   QuotaManager.decide(priorité, bot, modèle) ─► abonnement | API | pause (§ 6)
@@ -163,6 +162,7 @@ message utilisateur / @mention / transfert / heartbeat / routine / validation ac
       resume: session.sdkSessionId,    // continuité du fil
       systemPrompt: <prompt Ant stable : rôle + instructions + mémoire épinglée>,
       tools: ["WebSearch", "Agent"],   // seuls outils intégrés disponibles ; aucun outil local (Bash, Read…)
+      settingSources: [],              // n'utilise aucun fichier de réglages local
       allowedTools: ["WebSearch", "mcp__ant__*", "Agent"],  // auto-approuvés (ne restreint pas : c'est `tools` qui restreint)
       mcpServers: { ant: <serveur MCP en processus : messages, mémoire, tâches, ordinateur, validations> },
       agents: { leger: {...Haiku}, expert: {...Opus} },   // § 7
@@ -183,8 +183,7 @@ message utilisateur / @mention / transfert / heartbeat / routine / validation ac
 - Le worker tourne en continu : fermer l'interface n'arrête rien.
 - Parallélisme : plusieurs bots en même temps, limite globale réglable (par défaut 3 runs simultanés)
   pour ne pas saturer la VM ni l'abonnement.
-- Reprise après redémarrage : les jobs pg-boss non terminés sont rejoués ; la session SDK reprend via
-  `resume`.
+- Reprise après redémarrage : les jobs non terminés sont rejoués ; la session SDK reprend via `resume`.
 
 ---
 
@@ -249,7 +248,7 @@ Le choix se fait **à chaque exécution** grâce à l'option `env` de `query()`.
 - **« Hybride prudent »** (ma recommandation, voir § 6.1) : abonnement pour ce que tu déclenches, crédits
   API pour l'autonome. Avec bascule vers l'API si l'abonnement est limité.
 
-Le défaut final dépend de ta réponse à la question 1.
+Défaut retenu : **« Hybride prudent »**.
 
 ### 6.4 Règles de décision (`QuotaManager.decide`)
 
@@ -363,7 +362,7 @@ nombre d'appels « expert » par jour.
 
 ## 10. Planificateur : heartbeat, routines, résumé quotidien
 
-Tout repose sur pg-boss (jobs persistants dans Postgres, survit aux redémarrages).
+Tout repose sur la file de jobs Postgres (persistante, survit aux redémarrages) et un passage du planificateur toutes les 30 s.
 
 ### Heartbeat (par bot, fréquence réglable, défaut toutes les 3 h en heures actives)
 1. **Triage Haiku** (`claude-haiku-5-5`, effort `low`, sortie structurée via `outputFormat`) : reçoit un
@@ -571,7 +570,13 @@ planificateur), et je signale explicitement tout ce qui n'est pas terminé.
 
 ---
 
-## 18. Questions ouvertes
+## 18. Décisions prises (réponses aux questions ouvertes)
+
+Sans réponse détaillée, les recommandations ont été appliquées : mode « Hybride prudent », plafonds 8 $/jour et 100 $/mois,
+fuseau Europe/Zurich, silence 22:00–07:30, résumé à 07:45, passkey + TOTP + codes de secours, interface en français,
+VM 4 vCPU / 8 Go / 60 Go. Tout est modifiable dans l'interface (écrans Quota & budget et Réglages).
+
+### Questions d'origine
 
 1. **Abonnement et autonomie (bloquant pour le défaut du mode de calcul)** : après lecture du § 6.1,
    choisis entre (a) « Hybride prudent » par défaut (ma recommandation), (b) « Abonnement puis crédits

@@ -276,14 +276,14 @@ describe.skipIf(!hasDb)('bot runs', () => {
       setActivity: async () => undefined,
     };
     const tools = antTools(rc);
-    const exec = tools.find((x) => x.name === 'computer_exec')!;
-    const safe = await exec.handler({ command: 'ls -la' }, {});
+    const call = (name: string, args: Record<string, unknown>) =>
+      (tools.find((x) => x.name === name)!.handler as (a: Record<string, unknown>, extra: unknown) => Promise<unknown>)(args, {});
+    const safe = await call('computer_exec', { command: 'ls -la' });
     expect(JSON.stringify(safe)).toContain('pushed');
-    const risky = await exec.handler({ command: 'git push origin main' }, {});
+    const risky = await call('computer_exec', { command: 'git push origin main' });
     expect(JSON.stringify(risky)).toContain('validation');
     expect(execCalls).toHaveLength(1);
-    const browser = tools.find((x) => x.name === 'browser')!;
-    const click = await browser.handler({ action: 'click', ref: 'e7' }, {});
+    const click = await call('browser', { action: 'click', ref: 'e7' });
     expect(JSON.stringify(click)).toContain('validation');
     const pending = await t.ctx.db.select().from(approvals);
     expect(pending.map((p) => p.category).sort()).toEqual(['commande_risquee', 'navigateur_sensible']);
@@ -300,6 +300,23 @@ describe.skipIf(!hasDb)('bot runs', () => {
     // An approval cannot be executed twice.
     expect(await executeApproval(deps, execApproval.id)).toContain('rien à exécuter');
     expect(await t.ctx.db.select().from(jobs)).not.toHaveLength(0);
+  });
+
+  it('pauses cleanly when the credential is refused mid-run (no empty placeholder left)', async () => {
+    await updateSettings(t.ctx.db, { computeMode: 'api_only' });
+    const { run } = await dmRun();
+    const { query } = fakeQuery(async function* () {
+      yield sdk.init('sess-x');
+      yield sdk.assistant('', 'sess-x', 'authentication_failed');
+      yield sdk.result('', 0, 'claude-sonnet-5-5', 'sess-x');
+    });
+    const res = await executeRun(workerDeps(t.ctx, query), run.id, new AbortController().signal);
+    expect(res.outcome).toBe('deferred');
+    const state = await getComputeState(t.ctx);
+    expect(state.apiAuthFailed).toBe(true);
+    const all = await t.ctx.db.select().from(messages);
+    expect(all.some((m) => m.status === 'streaming')).toBe(false);
+    expect(all.filter((m) => m.authorKind === 'system' && m.content.startsWith('⏸️'))).toHaveLength(1);
   });
 
   it('records rate-limit utilisation from events', async () => {

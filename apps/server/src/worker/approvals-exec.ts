@@ -28,7 +28,7 @@ export async function executeApproval(deps: WorkerDeps, approvalId: string): Pro
       const res = await computer.exec({
         command: String(p.command),
         cwd: typeof p.cwd === 'string' ? p.cwd : undefined,
-        timeoutSec: typeof p.timeoutSec === 'number' ? p.timeoutSec : 120,
+        timeoutSec: typeof p.timeoutSec === 'number' ? Math.min(p.timeoutSec, 280) : 120,
       });
       await recordComputerAction(ctx, approval.botId, `$ ${String(p.command).slice(0, 200)} (validée)`);
       failed = res.exitCode !== 0;

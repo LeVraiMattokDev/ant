@@ -609,8 +609,24 @@ export async function executeRun(deps: WorkerDeps, runId: string, externalSignal
   let finalError: string | null = null;
   let lastSource: ComputeSource = decision.source;
 
+  /** Before pausing mid-run: keep partial text, drop an empty placeholder. */
+  const settlePlaceholder = async () => {
+    if (!streamMessageId) return;
+    if (finalText.trim()) {
+      await updateMessage(ctx, streamMessageId, { content: `${finalText}\n\n_(interrompu : en attente d’une source de calcul, la suite viendra à la reprise)_`, status: 'done' });
+    } else {
+      await ctx.db.delete(messages).where(eq(messages.id, streamMessageId));
+      await publish(ctx.sql, { type: 'channel.updated', channelId: channel?.id ?? '' });
+    }
+    await updateRun(ctx, run.id, { responseMessageId: null });
+    streamMessageId = null;
+  };
+
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (decision.source === 'paused') return pauseRun(deps, settings, run, decision.reason, decision.retryAt);
+    if (decision.source === 'paused') {
+      await settlePlaceholder();
+      return pauseRun(deps, settings, run, decision.reason, decision.retryAt);
+    }
     const source: ComputeSource = decision.source;
     lastSource = source;
     const abort = new AbortController();
@@ -668,11 +684,12 @@ export async function executeRun(deps: WorkerDeps, runId: string, externalSignal
     }
     if (result.kind === 'switch') {
       decision = await decideCompute(deps, { priority: run.priority, origin: run.origin, botId: bot.id, botDailyCapUsd: bot.apiDailyCapUsd }, settings);
+      // A pause is announced by pauseRun(); only real switches get a message here.
       const note =
         decision.source === 'paused'
-          ? `⏸️ ${result.switchReason}. ${decision.reason}.`
+          ? null
           : `🔀 Bascule ${source === 'subscription' ? 'de l’abonnement' : 'des crédits API'} vers ${decision.source === 'api' ? 'les crédits API' : 'l’abonnement'} : ${result.switchReason}.`;
-      if (channel) {
+      if (channel && note) {
         await createMessage(ctx, { channelId: channel.id, threadRootId: run.threadRootId, authorKind: 'system', content: note, meta: { kind: 'compute_switch', runId: run.id } });
       }
       await audit(ctx.db, { actor: 'system', event: 'compute.switch', runId: run.id, detail: { from: source, to: decision.source, reason: result.switchReason } });

@@ -1,0 +1,14 @@
+[Unit]
+Description=Isolation réseau des conteneurs Ant
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Les ponts n'existent qu'après le premier « docker compose up » : on attend qu'ils soient créés.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do ip link show ant-sandbox >/dev/null 2>&1 && exit 0; sleep 5; done; exit 1'
+ExecStart=/opt/ant/deploy/ant-firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -140,14 +140,10 @@ export function decideComputeSource(input: DecisionInput): ComputeDecision {
   const sub = subscriptionStatus(input);
   const api = apiStatus(input);
 
-  const useApi = (prefix: string): ComputeDecision =>
+  const useApi = (reasonIfApi: string, reasonIfPaused: string): ComputeDecision =>
     api.usable
-      ? { source: 'api', reason: prefix, maxBudgetUsd: api.maxBudgetUsd }
-      : {
-          source: 'paused',
-          reason: `${prefix} ; crédits API indisponibles (${api.why})`,
-          retryAt: sub.usable ? null : sub.retryAt,
-        };
+      ? { source: 'api', reason: reasonIfApi, maxBudgetUsd: api.maxBudgetUsd }
+      : { source: 'paused', reason: `${reasonIfPaused} et crédits API indisponibles (${api.why})`, retryAt: sub.usable ? null : sub.retryAt };
 
   switch (input.mode) {
     case 'api_only':
@@ -162,12 +158,14 @@ export function decideComputeSource(input: DecisionInput): ComputeDecision {
 
     case 'subscription_then_api':
       if (sub.usable) return { source: 'subscription', reason: 'abonnement disponible' };
-      return useApi(`bascule sur crédits API : ${sub.why}`);
+      return useApi(`bascule sur crédits API : ${sub.why}`, `abonnement indisponible (${sub.why})`);
 
     case 'hybrid_safe':
-      if (input.origin === 'autonomous') return useApi('mode hybride : le travail autonome passe par les crédits API');
+      if (input.origin === 'autonomous') {
+        return useApi('mode hybride : le travail autonome passe par les crédits API', 'mode hybride : travail autonome réservé aux crédits API');
+      }
       if (sub.usable) return { source: 'subscription', reason: 'demande de ta part, abonnement disponible' };
-      return useApi(`bascule sur crédits API : ${sub.why}`);
+      return useApi(`bascule sur crédits API : ${sub.why}`, `abonnement indisponible (${sub.why})`);
   }
 }
 
