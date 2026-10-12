@@ -36,7 +36,7 @@ export function RoutineEditor({ value, onChange }: { value: RoutineFields; onCha
 
   return (
     <div className="space-y-4">
-      <div className="rounded-[6px] border border-line bg-bg p-3">
+      <div className="rounded-[12px] border border-line bg-bg p-3">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-[15px] font-semibold">{description ?? 'Expression incomplète'}</div>

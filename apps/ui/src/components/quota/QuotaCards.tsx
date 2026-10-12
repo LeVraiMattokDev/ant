@@ -54,7 +54,7 @@ export function ComputeModeSelector({ mode }: { mode: ComputeMode }) {
               disabled={update.isPending}
               onClick={() => !selected && update.mutate({ computeMode: m })}
               className={cx(
-                'rounded-[6px] border p-3 text-left transition-colors',
+                'rounded-[12px] border p-3 text-left transition-colors',
                 selected ? 'border-accent bg-accent-soft/50' : 'border-line hover:border-line-strong hover:bg-hover',
               )}
             >
@@ -131,7 +131,7 @@ export function SubscriptionCard({ quota, settings }: { quota: QuotaStatusDTO; s
       ) : (
         <div className="space-y-4">
           {sub.health === 'auth_failed' && (
-            <div className="rounded-[4px] border border-danger/40 bg-danger-soft px-3 py-2 text-[13px] text-danger">
+            <div className="rounded-[8px] border border-danger/40 bg-danger-soft px-3 py-2 text-[13px] text-danger">
               Le jeton a été refusé (expiré ou révoqué). Génère un nouveau jeton avec <span className="mono">claude setup-token</span>.
             </div>
           )}

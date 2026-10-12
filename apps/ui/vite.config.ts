@@ -17,6 +17,8 @@ export default defineConfig({
       injectManifest: {
         rollupFormat: 'iife',
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // Inter ships every script; only the latin subsets are worth precaching (the others load on demand).
+        globIgnores: ['**/inter-{cyrillic,cyrillic-ext,greek,greek-ext,vietnamese}-*.woff2'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       devOptions: { enabled: false },
@@ -29,8 +31,8 @@ export default defineConfig({
         start_url: '/',
         scope: '/',
         display: 'standalone',
-        background_color: '#141518',
-        theme_color: '#141518',
+        background_color: '#1c1c1c',
+        theme_color: '#1c1c1c',
         icons: [
           { src: '/pwa-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/pwa-512.png', sizes: '512x512', type: 'image/png' },

@@ -10,8 +10,8 @@ export default function QuotaPage() {
   return (
     <>
       <PageHeader title="Quota et budget" description="Où passe le calcul de tes bots : ton abonnement Claude ou tes crédits API." />
-      <div className="scroll-y flex-1 p-4 md:p-6">
-        <div className="mx-auto max-w-6xl space-y-4">
+      <div className="scroll-y flex-1 px-4 pb-8 md:px-8">
+        <div className="max-w-6xl space-y-4">
           {quota.isPending ? (
             <LoadingBlock />
           ) : quota.isError ? (
@@ -19,7 +19,7 @@ export default function QuotaPage() {
           ) : (
             <>
               {quota.data.allPaused && (
-                <div role="alert" className="rounded-[6px] border border-danger/40 bg-danger-soft px-4 py-3 text-[13.5px]">
+                <div role="alert" className="rounded-[12px] border border-danger/40 bg-danger-soft px-4 py-3 text-[13.5px]">
                   <div className="font-semibold text-danger">Toutes les exécutions sont en pause</div>
                   <div className="mt-0.5">{quota.data.pausedReason ?? 'Aucune source de calcul disponible.'}</div>
                 </div>

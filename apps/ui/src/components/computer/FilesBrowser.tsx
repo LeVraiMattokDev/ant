@@ -26,7 +26,7 @@ export function FilesBrowser() {
               {i > 0 && <ChevronRight className="size-3.5 text-subtle" />}
               <button
                 type="button"
-                className="mono rounded-[3px] px-1 py-0.5 hover:bg-hover disabled:cursor-default disabled:hover:bg-transparent"
+                className="mono rounded-[6px] px-1 py-0.5 hover:bg-hover disabled:cursor-default disabled:hover:bg-transparent"
                 disabled={c.path === path || !c.path.startsWith(WORKSPACE_ROOT)}
                 onClick={() => setPath(c.path)}
               >

@@ -35,7 +35,7 @@ export function Toaster() {
           <div
             key={t.id}
             role={t.level === 'error' ? 'alert' : 'status'}
-            className="pointer-events-auto flex w-full max-w-sm overflow-hidden rounded-[6px] border border-line bg-surface shadow-pop"
+            className="pointer-events-auto flex w-full max-w-sm overflow-hidden rounded-[12px] border border-line bg-surface shadow-pop"
           >
             <div className={cx('w-[3px] shrink-0', BAR[t.level])} />
             <div className="min-w-0 flex-1 px-3 py-2">

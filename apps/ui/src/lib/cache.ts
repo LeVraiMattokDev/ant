@@ -3,7 +3,7 @@
  * They never mutate their input and return the same reference when nothing changes,
  * so TanStack Query can skip re-renders.
  */
-import type { ApprovalDTO, MessageDTO, NudgeDTO, RunDTO } from '@ant/shared';
+import type { ApprovalDTO, ChannelDTO, MessageDTO, NudgeDTO, RunDTO } from '@ant/shared';
 
 /** Shape of TanStack's InfiniteData for the channel message list. Page 0 is the newest page; each page is oldest → newest. */
 export interface MessagePages {
@@ -160,6 +160,31 @@ export function prependNudge(list: NudgeDTO[] | undefined, nudge: NudgeDTO): Nud
   if (!list) return list;
   if (list.some((n) => n.id === nudge.id)) return list;
   return [nudge, ...list];
+}
+
+/**
+ * Keeps `ChannelDTO.lastMessage` (list preview) and `lastMessageAt` in sync with a created or updated message.
+ * Only top-level messages become the preview; replies only bump `lastMessageAt`. An update replaces the
+ * preview only when it is the same message (same author and creation time), e.g. the end of a streamed reply.
+ */
+export function applyLastMessage(list: ChannelDTO[] | undefined, msg: MessageDTO, kind: 'created' | 'updated' = 'created'): ChannelDTO[] | undefined {
+  if (!list) return list;
+  let changed = false;
+  const next = list.map((c) => {
+    if (c.id !== msg.channelId) return c;
+    let out = c;
+    if (kind === 'created' && (!c.lastMessageAt || c.lastMessageAt < msg.createdAt)) out = { ...out, lastMessageAt: msg.createdAt };
+    if (!msg.threadRootId) {
+      const cur = c.lastMessage;
+      const preview = { content: msg.content, authorKind: msg.authorKind, botId: msg.botId, createdAt: msg.createdAt };
+      const same = !!cur && cur.createdAt === msg.createdAt && cur.authorKind === msg.authorKind && cur.botId === msg.botId;
+      const replace = kind === 'created' ? !cur || cur.createdAt <= msg.createdAt : same;
+      if (replace && !(same && cur?.content === msg.content)) out = { ...out, lastMessage: preview };
+    }
+    if (out !== c) changed = true;
+    return out;
+  });
+  return changed ? next : list;
 }
 
 export interface SnippetPart {

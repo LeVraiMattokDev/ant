@@ -16,6 +16,7 @@ import {
 } from '@ant/shared';
 import { PERMISSION_KEYS, PERMISSION_LABELS } from '../../lib/labels';
 import { Field, Spinner, Toggle, cx } from '../ui';
+import { BotAvatar } from '../BotAvatar';
 
 const HEARTBEAT_PRESETS = [
   { min: 60, label: '1 h' },
@@ -126,15 +127,18 @@ export function BotForm({
   return (
     <form onSubmit={submit} className="max-w-2xl" aria-label={bot ? `Modifier ${bot.name}` : 'Nouveau bot'}>
       <Section title="Identité">
-        <div className="grid gap-4 sm:grid-cols-[88px_1fr]">
-          <Field label="Avatar" htmlFor="bot-avatar" help="Un emoji.">
-            <input
-              id="bot-avatar"
-              className="input text-center text-[18px]"
-              value={s.avatar}
-              maxLength={8}
-              onChange={(e) => set('avatar', e.target.value)}
-            />
+        <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
+          <Field label="Avatar" htmlFor="bot-avatar" help="🐜 : avatar généré. Sinon, un emoji.">
+            <div className="flex items-center gap-2.5">
+              <BotAvatar bot={{ slug: s.slug || slugify(s.name) || 'bot', name: s.name, avatar: s.avatar }} size={36} label="Aperçu de l’avatar" />
+              <input
+                id="bot-avatar"
+                className="input w-16 text-center text-[18px]"
+                value={s.avatar}
+                maxLength={8}
+                onChange={(e) => set('avatar', e.target.value)}
+              />
+            </div>
           </Field>
           <Field label="Nom" htmlFor="bot-name">
             <input
@@ -157,7 +161,7 @@ export function BotForm({
           help="Utilisé pour mentionner le bot : @dev, @recherche…"
         >
           <div className="flex items-center">
-            <span className="flex h-8 items-center rounded-l-[4px] border border-r-0 border-line-strong bg-raised px-2 text-muted">@</span>
+            <span className="flex h-8 items-center rounded-l-[10px] border border-r-0 border-line-strong bg-raised px-2 text-muted">@</span>
             <input
               id="bot-slug"
               className="input rounded-l-none"
@@ -205,7 +209,7 @@ export function BotForm({
       </Section>
 
       <Section title="Permissions" description="Les actions sensibles passent toujours par une validation, quelles que soient ces permissions.">
-        <div className="divide-y divide-line rounded-[6px] border border-line px-3">
+        <div className="divide-y divide-line rounded-[12px] border border-line px-3">
           {PERMISSION_KEYS.map((k) => (
             <Toggle
               key={k}
@@ -300,11 +304,11 @@ export function BotForm({
       </Section>
 
       {error && (
-        <div role="alert" className="mb-3 rounded-[4px] border border-danger/40 bg-danger-soft px-3 py-2 text-[13px] text-danger">
+        <div role="alert" className="mb-3 rounded-[8px] border border-danger/40 bg-danger-soft px-3 py-2 text-[13px] text-danger">
           {error}
         </div>
       )}
-      <div className="sticky bottom-0 -mx-4 flex gap-2 border-t border-line bg-bg px-4 py-3 md:-mx-6 md:px-6">
+      <div className="sticky bottom-0 -mx-4 flex gap-2 border-t border-line bg-bg px-4 py-3 md:-mx-8 md:px-8">
         <button type="submit" className="btn btn-primary" disabled={!valid || saving}>
           {saving && <Spinner className="size-4 text-accent-fg" />}
           {bot ? 'Enregistrer' : 'Créer le bot'}

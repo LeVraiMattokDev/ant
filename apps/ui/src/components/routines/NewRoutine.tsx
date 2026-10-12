@@ -6,6 +6,7 @@ import { qk } from '../../lib/queries';
 import { toast } from '../../lib/toast';
 import { Field, Spinner } from '../ui';
 import { RoutineEditor, type RoutineFields } from './RoutineEditor';
+import { hasCustomEmoji } from '../../lib/avatar';
 
 const EXAMPLES = [
   'chaque lundi à 8h, fais-moi un point sur les tâches de la semaine',
@@ -13,12 +14,27 @@ const EXAMPLES = [
   'le 1er de chaque mois à 9h, prépare le bilan des dépenses',
 ];
 
-export function NewRoutine({ bots, channels, onDone }: { bots: BotDTO[]; channels: ChannelDTO[]; onDone: () => void }) {
+export function NewRoutine({
+  bots,
+  channels,
+  onDone,
+  initialBotId,
+  initialChannelId,
+}: {
+  bots: BotDTO[];
+  channels: ChannelDTO[];
+  onDone: () => void;
+  /** Prefill from a conversation ("Créer une routine" in the composer menu). */
+  initialBotId?: string;
+  initialChannelId?: string;
+}) {
   const qc = useQueryClient();
-  const [botId, setBotId] = useState(bots[0]?.id ?? '');
+  const [botId, setBotId] = useState(() => (initialBotId && bots.some((b) => b.id === initialBotId) ? initialBotId : (bots[0]?.id ?? '')));
   const [text, setText] = useState('');
   const [draft, setDraft] = useState<(RoutineFields & { description: string }) | null>(null);
-  const [channelId, setChannelId] = useState<string>('');
+  const [channelId, setChannelId] = useState<string>(() =>
+    initialChannelId && channels.some((c) => c.id === initialChannelId && c.kind === 'group' && c.botIds.includes(botId)) ? initialChannelId : '',
+  );
   const [error, setError] = useState<string | null>(null);
 
   const bot = bots.find((b) => b.id === botId);
@@ -66,7 +82,7 @@ export function NewRoutine({ bots, channels, onDone }: { bots: BotDTO[]; channel
   };
 
   return (
-    <section className="card p-4" aria-label="Nouvelle routine">
+    <section className="card p-5" aria-label="Nouvelle routine">
       <form onSubmit={submitText} className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-[220px_1fr]">
           <Field label="Bot" htmlFor="nr-bot">
@@ -81,7 +97,7 @@ export function NewRoutine({ bots, channels, onDone }: { bots: BotDTO[]; channel
             >
               {bots.map((b) => (
                 <option key={b.id} value={b.id}>
-                  {b.avatar} {b.name}
+                  {hasCustomEmoji(b.avatar) ? `${b.avatar} ${b.name}` : b.name}
                 </option>
               ))}
             </select>
@@ -125,7 +141,7 @@ export function NewRoutine({ bots, channels, onDone }: { bots: BotDTO[]; channel
       </form>
 
       {error && (
-        <div role="alert" className="mt-3 rounded-[4px] border border-danger/40 bg-danger-soft px-3 py-2 text-[13px] text-danger">
+        <div role="alert" className="mt-3 rounded-[8px] border border-danger/40 bg-danger-soft px-3 py-2 text-[13px] text-danger">
           {error}
         </div>
       )}

@@ -1,21 +1,20 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Hand, RotateCcw } from 'lucide-react';
-import type { ComputerHolder, ComputerStatusDTO } from '@ant/shared';
-import { post } from '../lib/api';
+import type { ComputerStatusDTO } from '@ant/shared';
 import { formatFull, formatRelative, formatShort } from '../lib/format';
-import { useBotMap, useComputerActivity, useComputerStatus, qk } from '../lib/queries';
-import { toast } from '../lib/toast';
+import { useBotMap, useComputerActivity, useComputerStatus } from '../lib/queries';
 import { VncScreen } from '../components/computer/VncScreen';
 import { TerminalView } from '../components/computer/TerminalView';
 import { FilesBrowser } from '../components/computer/FilesBrowser';
-import { Avatar, Badge, EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner, Tabs } from '../components/ui';
+import { useComputerControl } from '../components/computer/useComputerControl';
+import { Badge, EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner, Tabs } from '../components/ui';
+import { BotAvatar } from '../components/BotAvatar';
 
 type Tab = 'screen' | 'terminal' | 'activity' | 'files';
 
 function Offline() {
   return (
-    <div role="alert" className="card mx-auto max-w-xl p-5">
+    <div role="alert" className="card max-w-xl p-5">
       <h2 className="text-[15px] font-semibold">Ordinateur des agents injoignable</h2>
       <p className="mt-1.5 text-[13.5px] text-muted">
         Le service <span className="mono">computer</span> ne répond pas. Les bots ne peuvent pas utiliser le terminal, le navigateur ni les fichiers tant qu’il
@@ -42,7 +41,7 @@ function ActivityList() {
           null;
         return (
           <li key={a.id} className="flex gap-3 px-3 py-2">
-            <Avatar emoji={bot?.avatar ?? '·'} size="sm" />
+            <BotAvatar bot={bot} size={22} />
             <div className="min-w-0 flex-1 text-[13px]">
               <div className="flex flex-wrap items-baseline gap-x-2">
                 <span className="font-medium">{bot?.name ?? a.actor}</span>
@@ -78,7 +77,7 @@ function StatusBar({ status }: { status: ComputerStatusDTO }) {
       {active && (
         <span className="flex items-center gap-1">
           <span className="text-subtle">Bot actif :</span>
-          <Avatar emoji={active.avatar} size="sm" />
+          <BotAvatar bot={active} size={18} />
           {active.name}
         </span>
       )}
@@ -99,17 +98,8 @@ function StatusBar({ status }: { status: ComputerStatusDTO }) {
 
 export default function ComputerPage() {
   const status = useComputerStatus();
-  const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>('screen');
-
-  const control = useMutation({
-    mutationFn: (holder: ComputerHolder) => post<ComputerStatusDTO>('/api/computer/control', { holder }),
-    onSuccess: (s) => {
-      qc.setQueryData(qk.computerStatus, s);
-      toast.info(s.holder === 'user' ? 'Tu as la main' : 'Les agents ont repris la main');
-    },
-    onError: (err) => toast.fromError(err, 'Changement de contrôle impossible'),
-  });
+  const control = useComputerControl();
 
   const s = status.data;
   const online = !!s?.online && !status.isError;
@@ -135,8 +125,8 @@ export default function ComputerPage() {
           )
         }
       />
-      <div className="border-b border-line px-4 py-2 md:px-6">{s ? <StatusBar status={s} /> : status.isPending ? <Spinner /> : null}</div>
-      <div className="px-4 md:px-6">
+      <div className="px-4 pb-3 md:px-8">{s ? <StatusBar status={s} /> : status.isPending ? <Spinner /> : null}</div>
+      <div className="px-4 md:px-8">
         <Tabs<Tab>
           label="Ordinateur"
           value={tab}
@@ -149,7 +139,7 @@ export default function ComputerPage() {
           ]}
         />
       </div>
-      <div className="flex min-h-0 flex-1 flex-col p-4 md:p-6">
+      <div className="flex min-h-0 flex-1 flex-col px-4 pt-4 pb-6 md:px-8">
         {status.isPending ? (
           <LoadingBlock />
         ) : tab === 'activity' ? (

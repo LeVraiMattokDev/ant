@@ -135,6 +135,11 @@ describe.skipIf(!hasDb)('web API', () => {
     expect(job?.lane).toBe(`run:${bot.id}:${bot.dmChannelId}`);
     const list = (await get(`/api/channels/${bot.dmChannelId}/messages`)).json();
     expect(list[0].content).toBe('Bonjour');
+    // Thread replies are counted on the root message.
+    await post(`/api/channels/${bot.dmChannelId}/messages`, { content: 'Une précision', threadRootId: list[0].id });
+    const withReply = (await get(`/api/channels/${bot.dmChannelId}/messages`)).json();
+    expect(withReply[0].replyCount).toBe(1);
+    expect(withReply[0].lastReplyAt).toBeTruthy();
     const preview = ((await get('/api/channels')).json() as { id: string; lastMessage: { content: string } | null }[]).find((c) => c.id === bot.dmChannelId);
     expect(preview?.lastMessage?.content).toBe('Bonjour');
     const search = (await get('/api/search?q=bonjour')).json();

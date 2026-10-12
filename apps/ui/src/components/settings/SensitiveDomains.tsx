@@ -67,7 +67,7 @@ export function SensitiveDomains({ value, onChange }: { value: string[]; onChang
             <span className="mono">{d}</span>
             <button
               type="button"
-              className="rounded-[3px] p-0.5 text-subtle hover:bg-hover hover:text-fg"
+              className="rounded-[6px] p-0.5 text-subtle hover:bg-hover hover:text-fg"
               aria-label={`Retirer ${d}`}
               onClick={() => onChange(value.filter((x) => x !== d))}
             >

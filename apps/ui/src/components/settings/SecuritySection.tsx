@@ -95,7 +95,7 @@ function Passkeys() {
       ) : passkeys.data.length === 0 ? (
         <p className="text-[13px] text-subtle">Aucune passkey enregistrée.</p>
       ) : (
-        <ul className="divide-y divide-line rounded-[6px] border border-line">
+        <ul className="divide-y divide-line rounded-[12px] border border-line">
           {passkeys.data.map((p) => (
             <li key={p.id} className="flex items-center gap-3 px-3 py-2">
               <KeyRound className="size-4 text-subtle" />
@@ -159,7 +159,7 @@ function Sessions() {
       ) : sessions.isError ? (
         <ErrorBlock error={sessions.error} />
       ) : (
-        <ul className="divide-y divide-line rounded-[6px] border border-line">
+        <ul className="divide-y divide-line rounded-[12px] border border-line">
           {sessions.data.map((s) => (
             <li key={s.id} className="flex items-center gap-3 px-3 py-2">
               <div className="min-w-0 flex-1">

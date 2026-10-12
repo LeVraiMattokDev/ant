@@ -74,7 +74,7 @@ export function VncScreen({ interactive }: { interactive: boolean }) {
   }, [interactive, state]);
 
   return (
-    <div className="relative h-full min-h-[280px] w-full overflow-hidden rounded-[6px] border border-line bg-black">
+    <div className="relative h-full min-h-[280px] w-full overflow-hidden rounded-[12px] border border-line bg-black">
       <div ref={container} className="absolute inset-0" aria-label="Écran de l’ordinateur des agents" role="img" />
       {state !== 'connected' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-bg/80 text-[13px] text-muted">
@@ -92,7 +92,7 @@ export function VncScreen({ interactive }: { interactive: boolean }) {
         </div>
       )}
       {state === 'connected' && !interactive && (
-        <div className="pointer-events-none absolute top-2 left-2 rounded-[4px] bg-black/60 px-2 py-0.5 text-[11.5px] text-white/85">
+        <div className="pointer-events-none absolute top-2 left-2 rounded-[8px] bg-black/60 px-2 py-0.5 text-[11.5px] text-white/85">
           Lecture seule : prends la main pour interagir
         </div>
       )}

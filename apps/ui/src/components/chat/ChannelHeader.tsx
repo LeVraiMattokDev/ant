@@ -1,60 +1,87 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Hash, Menu, Settings2 } from 'lucide-react';
+import { ChevronLeft, FolderOpen, Monitor, Settings2 } from 'lucide-react';
 import type { BotDTO, ChannelDTO } from '@ant/shared';
-import { MODEL_LABELS } from '@ant/shared';
-import { useShell } from '../layout/AppShell';
-import { Avatar } from '../ui';
+import { BotAvatar, GroupAvatar } from '../BotAvatar';
+import { useShell } from '../layout/shell';
+import { cx } from '../ui';
 import { ChannelSettingsModal } from './ChannelSettingsModal';
+import { ModelSelector } from './ModelSelector';
+
+const iconBtn = 'btn btn-ghost btn-icon size-9 rounded-full';
 
 export function ChannelHeader({ channel, members, dmBot }: { channel: ChannelDTO; members: BotDTO[]; dmBot: BotDTO | undefined }) {
-  const { openDrawer } = useShell();
+  const { openFiles, toggleComputer, computerOpen } = useShell();
   const [settings, setSettings] = useState(false);
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-2 md:px-5">
-      <button type="button" className="btn btn-ghost btn-icon md:hidden" onClick={openDrawer} aria-label="Ouvrir la navigation">
-        <Menu className="size-5" />
-      </button>
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-2 md:border-transparent md:px-5">
+      <Link to="/" className={cx(iconBtn, 'md:hidden')} aria-label="Retour aux conversations">
+        <ChevronLeft className="size-5" />
+      </Link>
       {channel.kind === 'dm' && dmBot ? (
-        <Link to={`/bots/${dmBot.id}`} className="flex min-w-0 items-center gap-2.5 rounded-[4px] py-1 pr-2 hover:bg-hover">
-          <Avatar emoji={dmBot.avatar} size="sm" />
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-2">
-              <h1 className="truncate text-[14.5px] font-semibold">{dmBot.name}</h1>
-              <span className="hidden text-[12px] text-subtle sm:inline">{MODEL_LABELS[dmBot.model] ?? dmBot.model}</span>
-            </div>
-            <div className="truncate text-[12px] text-muted">
+        <Link
+          to={`/bots/${dmBot.id}`}
+          title={`${dmBot.name} : ${dmBot.role}`}
+          className="group flex min-w-0 items-center gap-2.5 rounded-[12px] py-1 pr-2 pl-1 hover:bg-hover"
+        >
+          <BotAvatar bot={dmBot} size={30} />
+          <div className="min-w-0 leading-tight">
+            <h1 className="truncate text-[15px] font-semibold">{dmBot.name}</h1>
+            <div className={cx('truncate text-[12px]', dmBot.paused ? 'text-warning' : 'text-subtle')}>
               {dmBot.paused ? 'En pause' : dmBot.activity ? dmBot.activity : dmBot.role}
             </div>
           </div>
         </Link>
       ) : (
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Hash className="size-4 shrink-0 text-subtle" />
-          <div className="min-w-0">
-            <h1 className="truncate text-[14.5px] font-semibold">{channel.name}</h1>
-            {channel.topic && <div className="truncate text-[12px] text-muted">{channel.topic}</div>}
+        <button
+          type="button"
+          onClick={() => setSettings(true)}
+          className="flex min-w-0 items-center gap-2.5 rounded-[12px] py-1 pr-2 pl-1 text-left hover:bg-hover"
+          title="Réglages du canal"
+        >
+          <GroupAvatar bots={members} size={32} />
+          <div className="min-w-0 leading-tight">
+            <h1 className="truncate text-[15px] font-semibold">{channel.name}</h1>
+            <div className="truncate text-[12px] text-subtle">{channel.topic || `${members.length} bot${members.length > 1 ? 's' : ''}`}</div>
           </div>
-        </div>
+        </button>
       )}
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex shrink-0 items-center gap-1">
         {channel.kind === 'group' && (
           <>
-            <div className="hidden items-center -space-x-1 sm:flex" aria-label={`${members.length} bots membres`}>
+            <div className="mr-1 hidden items-center gap-0.5 lg:flex" aria-label={`${members.length} bots membres`}>
               {members.slice(0, 5).map((b) => (
-                <Link key={b.id} to={`/bots/${b.id}`} title={`${b.name} (@${b.slug})`}>
-                  <Avatar emoji={b.avatar} size="sm" />
+                <Link key={b.id} to={`/bots/${b.id}`} title={`${b.name} (@${b.slug})`} className="rounded-[8px] p-0.5 hover:bg-hover">
+                  <BotAvatar bot={b} size={22} label={b.name} />
                 </Link>
               ))}
-              {members.length > 5 && <span className="pl-2 text-[12px] text-subtle">+{members.length - 5}</span>}
+              {members.length > 5 && <span className="pl-1 text-[12px] text-subtle">+{members.length - 5}</span>}
             </div>
-            <button type="button" className="btn btn-ghost btn-sm btn-icon ml-1" onClick={() => setSettings(true)} aria-label="Réglages du canal">
-              <Settings2 className="size-4" />
+            <button type="button" className={iconBtn} onClick={() => setSettings(true)} aria-label="Réglages du canal" title="Réglages du canal">
+              <Settings2 className="size-[18px]" />
             </button>
             <ChannelSettingsModal channel={channel} open={settings} onClose={() => setSettings(false)} />
           </>
         )}
+        {channel.kind === 'dm' && dmBot && (
+          <div className="min-w-0">
+            <ModelSelector bot={dmBot} />
+          </div>
+        )}
+        <button type="button" className={cx(iconBtn, 'hidden sm:inline-flex')} onClick={openFiles} aria-label="Fichiers de l’ordinateur" title="Fichiers de l’ordinateur">
+          <FolderOpen className="size-[18px]" />
+        </button>
+        <button
+          type="button"
+          className={cx(iconBtn, computerOpen && 'bg-active text-fg')}
+          onClick={toggleComputer}
+          aria-pressed={computerOpen}
+          aria-label="Écran de l’ordinateur"
+          title="Écran de l’ordinateur"
+        >
+          <Monitor className="size-[18px]" />
+        </button>
       </div>
     </header>
   );

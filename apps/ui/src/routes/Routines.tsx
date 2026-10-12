@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Play, Plus, Trash2 } from 'lucide-react';
 import type { RoutineDTO, RoutineInput } from '@ant/shared';
@@ -10,7 +10,8 @@ import { toast } from '../lib/toast';
 import { Modal, useConfirm } from '../components/Modal';
 import { NewRoutine } from '../components/routines/NewRoutine';
 import { RoutineEditor, type RoutineFields } from '../components/routines/RoutineEditor';
-import { Avatar, Badge, EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner, Toggle, cx } from '../components/ui';
+import { Badge, EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner, Toggle, cx } from '../components/ui';
+import { BotAvatar } from '../components/BotAvatar';
 
 /** Bots propose routines disabled; one that never ran and is disabled is treated as a proposal. */
 const isProposal = (r: RoutineDTO) => !r.enabled && !r.lastRunAt;
@@ -86,7 +87,7 @@ function EditRoutineModal({ routine, onClose }: { routine: RoutineDTO; onClose: 
   );
 }
 
-function RoutineRow({ routine, onEdit }: { routine: RoutineDTO; onEdit: () => void }) {
+function RoutineRow({ routine, onEdit, highlighted }: { routine: RoutineDTO; onEdit: () => void; highlighted?: boolean }) {
   const bots = useBotMap();
   const channels = useChannels();
   const confirm = useConfirm();
@@ -106,7 +107,7 @@ function RoutineRow({ routine, onEdit }: { routine: RoutineDTO; onEdit: () => vo
   };
 
   return (
-    <li className={cx('card p-3.5', proposal && 'border-accent/60 bg-accent-soft/30')}>
+    <li id={`routine-${routine.id}`} className={cx('card p-4', proposal && 'border-accent/50 bg-accent-soft/30', highlighted && 'highlight-flash')}>
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -124,7 +125,7 @@ function RoutineRow({ routine, onEdit }: { routine: RoutineDTO; onEdit: () => vo
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-subtle">
             {bot && (
               <Link to={`/bots/${bot.id}`} className="flex items-center gap-1 hover:text-fg">
-                <Avatar emoji={bot.avatar} size="sm" />
+                <BotAvatar bot={bot} size={18} />
                 {bot.name}
               </Link>
             )}
@@ -180,8 +181,36 @@ export function RoutinesPage() {
   const routines = useRoutines();
   const bots = useBots();
   const channels = useChannels();
-  const [creating, setCreating] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const [creating, setCreating] = useState(params.get('new') === '1');
+  const [prefill, setPrefill] = useState<{ botId?: string; channelId?: string }>({
+    botId: params.get('bot') ?? undefined,
+    channelId: params.get('channel') ?? undefined,
+  });
   const [editing, setEditing] = useState<RoutineDTO | null>(null);
+  const focusId = params.get('id');
+
+  // Deep links: "?new=1&bot=…&channel=…" opens the creation form prefilled; "?id=…" scrolls to a routine.
+  useEffect(() => {
+    if (params.get('new') !== '1') return;
+    setCreating(true);
+    setPrefill({ botId: params.get('bot') ?? undefined, channelId: params.get('channel') ?? undefined });
+    const next = new URLSearchParams(params);
+    next.delete('new');
+    next.delete('bot');
+    next.delete('channel');
+    setParams(next, { replace: true });
+  }, [params, setParams]);
+
+  useEffect(() => {
+    if (!focusId || !routines.data) return;
+    requestAnimationFrame(() => document.getElementById(`routine-${focusId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+  }, [focusId, routines.data]);
+
+  const closeCreation = () => {
+    setCreating(false);
+    setPrefill({});
+  };
 
   const sorted = [...(routines.data ?? [])].sort((a, b) => {
     const pa = isProposal(a) ? 0 : a.enabled ? 1 : 2;
@@ -204,10 +233,17 @@ export function RoutinesPage() {
           )
         }
       />
-      <div className="scroll-y flex-1 p-4 md:p-6">
-        <div className="mx-auto max-w-3xl space-y-4">
+      <div className="scroll-y flex-1 px-4 pb-6 md:px-8">
+        <div className="max-w-3xl space-y-4">
           {creating && bots.data && (
-            <NewRoutine bots={bots.data} channels={channels.data ?? []} onDone={() => setCreating(false)} />
+            <NewRoutine
+              key={`${prefill.botId ?? ''}:${prefill.channelId ?? ''}`}
+              bots={bots.data}
+              channels={channels.data ?? []}
+              initialBotId={prefill.botId}
+              initialChannelId={prefill.channelId}
+              onDone={closeCreation}
+            />
           )}
           {routines.isPending ? (
             <LoadingBlock />
@@ -229,7 +265,7 @@ export function RoutinesPage() {
           ) : (
             <ul className="space-y-3">
               {sorted.map((r) => (
-                <RoutineRow key={r.id} routine={r} onEdit={() => setEditing(r)} />
+                <RoutineRow key={r.id} routine={r} onEdit={() => setEditing(r)} highlighted={focusId === r.id} />
               ))}
             </ul>
           )}

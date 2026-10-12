@@ -21,7 +21,7 @@ export function LoadingBlock({ label = 'Chargement…' }: { label?: string }) {
 export function ErrorBlock({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = error instanceof Error ? error.message : 'Erreur inattendue.';
   return (
-    <div role="alert" className="m-4 rounded-[6px] border border-danger/40 bg-danger-soft px-3 py-2 text-sm">
+    <div role="alert" className="m-4 rounded-[12px] border border-danger/40 bg-danger-soft px-4 py-3 text-sm">
       <div className="text-danger">{message}</div>
       {onRetry && (
         <button type="button" className="btn btn-sm mt-2" onClick={onRetry}>
@@ -34,8 +34,8 @@ export function ErrorBlock({ error, onRetry }: { error: unknown; onRetry?: () =>
 
 export function EmptyState({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="px-4 py-10 text-center">
-      <div className="font-medium">{title}</div>
+    <div className="px-4 py-12 text-center">
+      <div className="text-[15px] font-semibold">{title}</div>
       {children && <div className="mx-auto mt-1 max-w-md text-sm text-muted">{children}</div>}
       {action && <div className="mt-4">{action}</div>}
     </div>
@@ -96,14 +96,14 @@ export function Toggle({
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cx(
-          'relative mt-0.5 h-[18px] w-[32px] shrink-0 rounded-full border transition-colors disabled:opacity-50',
-          checked ? 'border-accent bg-accent' : 'border-line-strong bg-raised',
+          'relative mt-0.5 h-[20px] w-[34px] shrink-0 rounded-full border transition-colors disabled:opacity-50',
+          checked ? 'border-accent bg-accent' : 'border-line-strong bg-active',
         )}
       >
         <span
           className={cx(
-            'absolute top-[2px] left-0 size-3 rounded-full transition-transform',
-            checked ? 'translate-x-[16px] bg-accent-fg' : 'translate-x-[2px] bg-muted',
+            'absolute top-[2px] left-0 size-[14px] rounded-full shadow-sm transition-transform',
+            checked ? 'translate-x-[16px] bg-white' : 'translate-x-[2px] bg-muted',
           )}
         />
       </button>
@@ -114,7 +114,7 @@ export function Toggle({
 type Tone = 'neutral' | 'accent' | 'danger' | 'success' | 'warning' | 'info';
 
 const TONES: Record<Tone, string> = {
-  neutral: 'border-line bg-raised text-muted',
+  neutral: 'bg-active text-muted',
   accent: 'border-transparent bg-accent-soft text-accent-text',
   danger: 'border-transparent bg-danger-soft text-danger',
   success: 'border-transparent bg-success-soft text-success',
@@ -164,7 +164,7 @@ export function Gauge({
       aria-valuemin={0}
       aria-valuemax={max}
       aria-valuenow={value ?? undefined}
-      className="relative h-2 w-full overflow-hidden rounded-[2px] bg-raised"
+      className="relative h-2 w-full overflow-hidden rounded-full bg-active"
     >
       <div
         className={cx('h-full transition-[width]', danger ? 'bg-danger' : warn ? 'bg-warning' : 'bg-accent')}
@@ -192,30 +192,35 @@ export function Tabs<T extends string>({
   value,
   onChange,
   label,
+  className,
 }: {
   tabs: TabItem<T>[];
   value: T;
   onChange: (v: T) => void;
   label: string;
+  className?: string;
 }) {
   return (
-    <div role="tablist" aria-label={label} className="flex gap-1 overflow-x-auto border-b border-line">
+    <div role="tablist" aria-label={label} className={cx('segmented', className)}>
       {tabs.map((t) => (
         <button
           key={t.id}
           role="tab"
           type="button"
           aria-selected={t.id === value}
+          tabIndex={t.id === value ? 0 : -1}
           onClick={() => onChange(t.id)}
           onKeyDown={(e) => {
             const idx = tabs.findIndex((x) => x.id === value);
-            if (e.key === 'ArrowRight') onChange(tabs[(idx + 1) % tabs.length]!.id);
-            if (e.key === 'ArrowLeft') onChange(tabs[(idx - 1 + tabs.length) % tabs.length]!.id);
+            let next: number | null = null;
+            if (e.key === 'ArrowRight') next = (idx + 1) % tabs.length;
+            if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
+            if (next === null) return;
+            e.preventDefault();
+            onChange(tabs[next]!.id);
+            const sibling = e.currentTarget.parentElement?.children[next] as HTMLElement | undefined;
+            sibling?.focus();
           }}
-          className={cx(
-            '-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] font-medium',
-            t.id === value ? 'border-accent text-fg' : 'border-transparent text-muted hover:text-fg',
-          )}
         >
           {t.label}
         </button>
@@ -224,28 +229,28 @@ export function Tabs<T extends string>({
   );
 }
 
-export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
+export function PageHeader({
+  title,
+  description,
+  actions,
+  icon,
+}: {
+  title: string;
+  description?: ReactNode;
+  actions?: ReactNode;
+  icon?: ReactNode;
+}) {
   return (
-    <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3 md:px-6">
-      <div className="min-w-0">
-        <h1 className="text-[17px] font-semibold tracking-[-0.01em]">{title}</h1>
-        {description && <p className="mt-0.5 text-[13px] text-muted">{description}</p>}
+    <header className="flex flex-wrap items-end justify-between gap-3 px-4 pt-5 pb-4 md:px-8 md:pt-7">
+      <div className="flex min-w-0 items-center gap-3.5">
+        {icon}
+        <div className="min-w-0">
+          <h1 className="text-[22px] font-semibold tracking-[-0.02em]">{title}</h1>
+          {description && <div className="mt-1 max-w-2xl text-[13.5px] text-muted">{description}</div>}
+        </div>
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </header>
-  );
-}
-
-export function Avatar({ emoji, size = 'md', label }: { emoji: string | null | undefined; size?: 'sm' | 'md' | 'lg'; label?: string }) {
-  const dims = size === 'sm' ? 'size-5 text-[12px]' : size === 'lg' ? 'size-10 text-[22px]' : 'size-8 text-[17px]';
-  return (
-    <span
-      aria-label={label}
-      role={label ? 'img' : undefined}
-      className={cx('inline-flex shrink-0 items-center justify-center rounded-[5px] border border-line bg-raised leading-none', dims)}
-    >
-      {emoji || '·'}
-    </span>
   );
 }
 
@@ -255,5 +260,45 @@ export function KeyValue({ label, children }: { label: string; children: ReactNo
       <span className="text-muted">{label}</span>
       <span className="min-w-0 text-right">{children}</span>
     </div>
+  );
+}
+
+/** Bare on/off switch (the accessible name comes from `label`). */
+export function Switch({
+  checked,
+  onChange,
+  label,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onChange(!checked);
+      }}
+      className={cx(
+        'relative h-[18px] w-[30px] shrink-0 rounded-full border transition-colors disabled:opacity-50',
+        checked ? 'border-accent bg-accent' : 'border-line-strong bg-active',
+      )}
+    >
+      <span
+        className={cx(
+          'absolute top-[2px] left-0 size-3 rounded-full shadow-sm transition-transform',
+          checked ? 'translate-x-[14px] bg-white' : 'translate-x-[2px] bg-muted',
+        )}
+      />
+    </button>
   );
 }

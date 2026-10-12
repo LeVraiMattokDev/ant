@@ -3,14 +3,16 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Search as SearchIcon } from 'lucide-react';
 import type { SearchResultDTO } from '@ant/shared';
 import { parseSnippet } from '../lib/cache';
+import { stripMarkdown } from '../lib/preview';
 import { formatFull, formatShort } from '../lib/format';
 import { useBotMap, useChannels, useSearch } from '../lib/queries';
-import { Avatar, EmptyState, ErrorBlock, LoadingBlock, PageHeader } from '../components/ui';
+import { EmptyState, ErrorBlock, LoadingBlock, PageHeader } from '../components/ui';
+import { BotAvatar, OwnerAvatar } from '../components/BotAvatar';
 
 export function Snippet({ text }: { text: string }) {
   return (
     <>
-      {parseSnippet(text).map((p, i) => (p.match ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>))}
+      {parseSnippet(stripMarkdown(text)).map((p, i) => (p.match ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>))}
     </>
   );
 }
@@ -70,7 +72,7 @@ export function SearchPage() {
   return (
     <>
       <PageHeader title="Recherche" description="Dans tous les messages, fils compris." />
-      <div className="border-b border-line px-4 py-3 md:px-6">
+      <div className="border-b border-line px-4 pb-4 md:px-8">
         <form onSubmit={submit} role="search" className="flex gap-2">
           <div className="relative flex-1">
             <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-subtle" />
@@ -127,17 +129,17 @@ export function SearchPage() {
           <EmptyState title="Aucun résultat">Essaie d’autres mots ou retire des filtres.</EmptyState>
         ) : (
           <>
-            <div className="px-4 pt-3 text-[12px] text-subtle md:px-6">
+            <div className="px-4 pt-4 pb-1 text-[12px] text-subtle md:px-8">
               {search.data.length} résultat{search.data.length > 1 ? 's' : ''}
             </div>
-            <ul className="divide-y divide-line">
+            <ul className="max-w-4xl space-y-0.5 px-1.5 pb-6 md:px-5">
               {search.data.map((r) => {
                 const bot = r.message.botId ? bots.get(r.message.botId) : undefined;
                 const author = r.message.authorKind === 'user' ? 'Toi' : r.message.authorKind === 'system' ? 'Système' : (bot?.name ?? 'Bot');
                 return (
                   <li key={r.message.id}>
-                    <Link to={resultLink(r)} className="flex gap-3 px-4 py-3 hover:bg-surface md:px-6">
-                      {bot ? <Avatar emoji={bot.avatar} size="sm" /> : <span className="size-5 shrink-0" />}
+                    <Link to={resultLink(r)} className="flex gap-3 rounded-[14px] px-3 py-3 hover:bg-hover">
+                      {bot ? <BotAvatar bot={bot} size={28} /> : r.message.authorKind === 'user' ? <OwnerAvatar size={28} /> : <span className="size-7 shrink-0" />}
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-baseline gap-x-2 text-[12.5px]">
                           <span className="font-semibold">{author}</span>

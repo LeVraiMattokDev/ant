@@ -1,67 +1,76 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useLocation } from 'react-router-dom';
-import { Sidebar } from './Sidebar';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { DESKTOP_QUERY, useMediaQuery } from '../../lib/hooks';
+import { NewChannelModal } from '../chat/NewChannelModal';
+import { FilesDrawer } from '../computer/FilesDrawer';
+import { cx } from '../ui';
+import { ConversationList } from './ConversationList';
+import { IconRail } from './IconRail';
 import { MobileTabBar } from './MobileTabBar';
 import { PausedBanner } from './PausedBanner';
-import { NewChannelModal } from '../chat/NewChannelModal';
-import { cx } from '../ui';
+import { ShellContext, type ShellApi } from './shell';
 
-interface ShellApi {
-  openDrawer: () => void;
-  openNewChannel: () => void;
-}
-
-const ShellContext = createContext<ShellApi>({ openDrawer: () => {}, openNewChannel: () => {} });
-
-export const useShell = () => useContext(ShellContext);
+// noVNC is heavy: the live panel is loaded on first use.
+const ComputerPanel = lazy(() => import('../computer/ComputerPanel'));
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const [drawer, setDrawer] = useState(false);
   const [newChannel, setNewChannel] = useState(false);
+  const [files, setFiles] = useState(false);
+  const [computer, setComputer] = useState(false);
+  const desktop = useMediaQuery(DESKTOP_QUERY);
   const location = useLocation();
+  const navigate = useNavigate();
   const inConversation = location.pathname.startsWith('/c/');
+  const onComputerPage = location.pathname.startsWith('/computer');
 
-  useEffect(() => setDrawer(false), [location.pathname]);
-
+  // The docked panel would duplicate the full computer page.
   useEffect(() => {
-    if (!drawer) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setDrawer(false);
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [drawer]);
+    if (onComputerPage || !desktop) setComputer(false);
+  }, [onComputerPage, desktop]);
 
-  const openDrawer = useCallback(() => setDrawer(true), []);
-  const openNewChannel = useCallback(() => {
-    setDrawer(false);
-    setNewChannel(true);
-  }, []);
-  const api = useMemo(() => ({ openDrawer, openNewChannel }), [openDrawer, openNewChannel]);
+  const openNewChannel = useCallback(() => setNewChannel(true), []);
+  const openFiles = useCallback(() => setFiles(true), []);
+  const toggleComputer = useCallback(() => {
+    if (!desktop) navigate('/computer');
+    else setComputer((v) => !v);
+  }, [desktop, navigate]);
+
+  const api = useMemo<ShellApi>(
+    () => ({ openNewChannel, openFiles, toggleComputer, computerOpen: computer }),
+    [openNewChannel, openFiles, toggleComputer, computer],
+  );
 
   return (
     <ShellContext.Provider value={api}>
-      <div className="flex h-full overflow-hidden">
-        <aside className="hidden w-[248px] shrink-0 border-r border-line bg-surface md:flex md:flex-col">
-          <Sidebar />
-        </aside>
+      <div className="flex h-full overflow-hidden bg-bg md:bg-rail">
+        <div className="hidden md:flex">
+          <IconRail />
+        </div>
+        <div className="flex min-w-0 flex-1 overflow-hidden md:mt-2 md:rounded-tl-[18px] md:border-t md:border-l md:border-line md:bg-bg">
+          <aside aria-label="Agents et routines" className="hidden w-[272px] shrink-0 flex-col border-r border-line bg-surface md:flex xl:w-[300px]">
+            <ConversationList variant="sidebar" />
+          </aside>
 
-        {drawer && (
-          <div className="fixed inset-0 z-40 md:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
-            <div className="absolute inset-0 bg-black/55" onClick={() => setDrawer(false)} />
-            <aside className="safe-top absolute inset-y-0 left-0 flex w-[84%] max-w-[300px] flex-col border-r border-line bg-surface shadow-pop">
-              <Sidebar onNavigate={() => setDrawer(false)} />
-            </aside>
+          <div
+            className={cx(
+              'safe-top flex min-w-0 flex-1 flex-col md:pt-0',
+              !inConversation && 'pb-[calc(60px+env(safe-area-inset-bottom))] md:pb-0',
+            )}
+          >
+            <PausedBanner />
+            <main className="flex min-h-0 flex-1 flex-col">{children}</main>
           </div>
-        )}
 
-        <div className={cx('safe-top flex min-w-0 flex-1 flex-col', !inConversation && 'pb-[calc(56px+env(safe-area-inset-bottom))] md:pb-0')}>
-          <PausedBanner />
-          <main className="flex min-h-0 flex-1 flex-col">{children}</main>
+          {computer && (
+            <Suspense fallback={null}>
+              <ComputerPanel onClose={() => setComputer(false)} />
+            </Suspense>
+          )}
         </div>
       </div>
       {!inConversation && <MobileTabBar />}
       <NewChannelModal open={newChannel} onClose={() => setNewChannel(false)} />
+      <FilesDrawer open={files} onClose={() => setFiles(false)} />
     </ShellContext.Provider>
   );
 }

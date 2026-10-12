@@ -12,7 +12,7 @@ export function getTheme(): Theme {
 export function setTheme(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', theme);
   const meta = document.querySelector('meta[name="theme-color"]');
-  meta?.setAttribute('content', theme === 'light' ? '#f7f7f5' : '#141518');
+  meta?.setAttribute('content', theme === 'light' ? '#ffffff' : '#1c1c1c');
   try {
     localStorage.setItem(KEY, theme);
   } catch {

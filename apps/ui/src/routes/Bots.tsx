@@ -3,7 +3,8 @@ import { Plus } from 'lucide-react';
 import { EFFORT_LABELS, MODEL_LABELS, type BotDTO } from '@ant/shared';
 import { useBots } from '../lib/queries';
 import { heartbeatLabel } from '../lib/format';
-import { Avatar, Badge, EmptyState, ErrorBlock, LoadingBlock, PageHeader } from '../components/ui';
+import { Badge, EmptyState, ErrorBlock, LoadingBlock, PageHeader } from '../components/ui';
+import { BotAvatar } from '../components/BotAvatar';
 
 export function BotStatus({ bot }: { bot: BotDTO }) {
   if (bot.paused) return <Badge tone="warning">En pause</Badge>;
@@ -15,7 +16,7 @@ function BotCard({ bot }: { bot: BotDTO }) {
   return (
     <li className="card flex flex-col p-3.5">
       <div className="flex items-start gap-3">
-        <Avatar emoji={bot.avatar} size="lg" />
+        <BotAvatar bot={bot} size={44} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <Link to={`/bots/${bot.id}`} className="truncate text-[15px] font-semibold hover:underline">
@@ -58,7 +59,7 @@ export function BotsPage() {
           </Link>
         }
       />
-      <div className="scroll-y flex-1 p-4 md:p-6">
+      <div className="scroll-y flex-1 px-4 pb-8 md:px-8">
         {bots.isPending ? (
           <LoadingBlock />
         ) : bots.isError ? (

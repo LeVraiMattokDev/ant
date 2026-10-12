@@ -198,7 +198,7 @@ export function SetupPage() {
         {step === 'credentials' && (
           <form onSubmit={submitCredentials} className="space-y-4">
             {auth.data?.enrolmentPending && (
-              <div className="rounded-[4px] border border-warning/40 bg-warning-soft px-3 py-2 text-[13px]">
+              <div className="rounded-[8px] border border-warning/40 bg-warning-soft px-3 py-2 text-[13px]">
                 L’initialisation a été interrompue avant la configuration du code. Recommence avec le jeton d’initialisation.
               </div>
             )}
@@ -260,13 +260,13 @@ export function SetupPage() {
 
         {step === 'totp' && totp && (
           <form onSubmit={submitTotp} className="space-y-4">
-            <div className="flex justify-center rounded-[6px] border border-line bg-surface p-4">
+            <div className="flex justify-center rounded-[12px] border border-line bg-surface p-4">
               <QrCode text={totp.totpUri} label="QR code de configuration de l’authentification à deux facteurs" />
             </div>
             <div>
               <div className="label">Ou saisis cette clé manuellement</div>
               <div className="flex items-center gap-2">
-                <code className="mono flex-1 break-all rounded-[4px] border border-line bg-bg px-2 py-1.5">{totp.totpSecret}</code>
+                <code className="mono flex-1 break-all rounded-[8px] border border-line bg-bg px-2 py-1.5">{totp.totpSecret}</code>
                 <button
                   type="button"
                   className="btn btn-sm"

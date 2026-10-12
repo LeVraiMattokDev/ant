@@ -12,6 +12,7 @@ import { Markdown } from '../components/Markdown';
 import { useConfirm } from '../components/Modal';
 import { MemoryModal } from '../components/memory/MemoryModal';
 import { Badge, EmptyState, ErrorBlock, LoadingBlock, PageHeader, Tabs, cx } from '../components/ui';
+import { BotAvatar } from '../components/BotAvatar';
 
 export function sortMemory(items: MemoryItemDTO[]): MemoryItemDTO[] {
   return [...items].sort(
@@ -53,7 +54,7 @@ function MemoryRow({ item, onEdit }: { item: MemoryItemDTO; onEdit: () => void }
   const long = item.content.length > 280;
 
   return (
-    <li className={cx('px-4 py-3 md:px-6', item.pinned && 'bg-accent-soft/25')}>
+    <li className={cx('px-4 py-4 md:px-8', item.pinned && 'bg-accent-soft/25')}>
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -126,7 +127,13 @@ export function MemoryPage() {
   const scope = tab === 'shared' ? 'shared' : 'bot';
   const memory = useMemory({ scope, botId: scope === 'bot' ? tab : undefined, q: debouncedQ || undefined, kind: kind || undefined });
 
-  const tabs = [{ id: 'shared', label: 'Partagée' }, ...(bots.data ?? []).map((b) => ({ id: b.id, label: `${b.avatar} ${b.name}` }))];
+  const tabs = [{ id: 'shared', label: 'Partagée' }, ...(bots.data ?? []).map((b) => ({ id: b.id, label: (
+      <>
+        <BotAvatar bot={b} size={16} />
+        {b.name}
+      </>
+    ),
+  }))];
   const items = sortMemory(memory.data ?? []);
 
   return (
@@ -141,10 +148,10 @@ export function MemoryPage() {
           </button>
         }
       />
-      <div className="px-4 md:px-6">
+      <div className="px-4 md:px-8">
         <Tabs label="Portée de la mémoire" tabs={tabs} value={tab} onChange={setTab} />
       </div>
-      <div className="flex flex-wrap gap-2 border-b border-line px-4 py-2.5 md:px-6">
+      <div className="flex flex-wrap gap-2 border-b border-line px-4 pt-3 pb-3 md:px-8">
         <div className="relative min-w-[200px] flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-subtle" />
           <input type="search" className="input pl-8" placeholder="Rechercher dans la mémoire…" aria-label="Rechercher dans la mémoire" value={q} onChange={(e) => setQ(e.target.value)} />

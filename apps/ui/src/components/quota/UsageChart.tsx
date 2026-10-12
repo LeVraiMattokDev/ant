@@ -110,7 +110,7 @@ export function UsageChart({ data, metric }: { data: DayBucket[]; metric: UsageM
       {hovered && hover !== null && (
         <div
           role="tooltip"
-          className="pointer-events-none absolute z-10 min-w-40 rounded-[6px] border border-line bg-surface px-2.5 py-2 text-[12px] shadow-pop"
+          className="pointer-events-none absolute z-10 min-w-40 rounded-[12px] border border-line bg-surface px-2.5 py-2 text-[12px] shadow-pop"
           style={{
             left: Math.min(width - 170, Math.max(0, M.left + band * hover + band / 2 - 80)),
             top: 0,

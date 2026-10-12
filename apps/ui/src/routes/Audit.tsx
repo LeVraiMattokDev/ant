@@ -35,7 +35,7 @@ function DetailRow({ entry }: { entry: AuditEntryDTO }) {
             </>
           )}
         </dl>
-        <pre className="mono mt-2 max-h-96 overflow-auto rounded-[4px] border border-line bg-surface p-2.5 text-[12px] whitespace-pre-wrap">
+        <pre className="mono mt-2 max-h-96 overflow-auto rounded-[8px] border border-line bg-surface p-2.5 text-[12px] whitespace-pre-wrap">
           {JSON.stringify(entry.detail, null, 2) ?? 'null'}
         </pre>
       </td>
@@ -80,7 +80,7 @@ export function AuditPage() {
           </div>
         }
       />
-      <div className="flex flex-wrap gap-2 border-b border-line px-4 py-2.5 md:px-6">
+      <div className="flex flex-wrap gap-2 border-b border-line px-4 pb-3 md:px-8">
         <input className="input w-full sm:w-56" placeholder="Événement (ex. tool.call)" aria-label="Filtrer par événement" value={event} onChange={(e) => setEvent(e.target.value)} />
         <input className="input w-full sm:w-56" placeholder="Acteur (ex. bot:dev, owner)" aria-label="Filtrer par acteur" value={actor} onChange={(e) => setActor(e.target.value)} />
       </div>

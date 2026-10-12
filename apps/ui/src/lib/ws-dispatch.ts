@@ -5,6 +5,7 @@ import {
   appendDeltaToPages,
   appendDeltaToThread,
   applyApprovalUpdate,
+  applyLastMessage,
   applyRunUpdate,
   bumpReplyCount,
   prependNudge,
@@ -22,19 +23,6 @@ export interface DispatchHooks {
   onNudge?: (nudge: NudgeDTO) => void;
 }
 
-function touchChannel(qc: QueryClient, channelId: string, at: string): void {
-  qc.setQueryData<ChannelDTO[]>(qk.channels, (list) => {
-    if (!list) return list;
-    let changed = false;
-    const next = list.map((c) => {
-      if (c.id !== channelId || (c.lastMessageAt && c.lastMessageAt >= at)) return c;
-      changed = true;
-      return { ...c, lastMessageAt: at };
-    });
-    return changed ? next : list;
-  });
-}
-
 export function dispatchServerEvent(qc: QueryClient, event: ServerEvent, hooks: DispatchHooks = {}): void {
   switch (event.type) {
     case 'message.created': {
@@ -45,7 +33,7 @@ export function dispatchServerEvent(qc: QueryClient, event: ServerEvent, hooks: 
       } else {
         qc.setQueryData<MessagePages>(qk.messages(m.channelId), (d) => upsertChannelMessage(d, m));
       }
-      touchChannel(qc, m.channelId, m.createdAt);
+      qc.setQueryData<ChannelDTO[]>(qk.channels, (list) => applyLastMessage(list, m, 'created'));
       return;
     }
     case 'message.updated': {
@@ -55,6 +43,7 @@ export function dispatchServerEvent(qc: QueryClient, event: ServerEvent, hooks: 
       } else {
         qc.setQueryData<MessagePages>(qk.messages(m.channelId), (d) => upsertChannelMessage(d, m));
         qc.setQueryData<ThreadData>(qk.thread(m.id), (d) => upsertThreadMessage(d, m));
+        qc.setQueryData<ChannelDTO[]>(qk.channels, (list) => applyLastMessage(list, m, 'updated'));
       }
       return;
     }

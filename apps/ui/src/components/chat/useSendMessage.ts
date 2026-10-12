@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { MessageDTO, RunDTO } from '@ant/shared';
+import type { ChannelDTO, MessageDTO, RunDTO } from '@ant/shared';
 import { post } from '../../lib/api';
-import { applyRunUpdate, upsertChannelMessage, upsertThreadMessage, type MessagePages, type ThreadData } from '../../lib/cache';
+import { applyLastMessage, applyRunUpdate, upsertChannelMessage, upsertThreadMessage, type MessagePages, type ThreadData } from '../../lib/cache';
 import { qk } from '../../lib/queries';
 import { markRead } from '../../lib/unread';
 
@@ -16,6 +16,7 @@ export function useSendMessage(channelId: string, threadRootId: string | null) {
       } else {
         qc.setQueryData<MessagePages>(qk.messages(channelId), (d) => upsertChannelMessage(d, message));
       }
+      qc.setQueryData<ChannelDTO[]>(qk.channels, (list) => applyLastMessage(list, message, 'created'));
       qc.setQueryData<RunDTO[]>(qk.activeRuns, (d) => runs.reduce<RunDTO[] | undefined>((acc, r) => applyRunUpdate(acc, r), d));
       markRead(channelId, message.createdAt);
     },

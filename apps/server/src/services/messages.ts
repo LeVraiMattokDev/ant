@@ -94,8 +94,9 @@ export async function listChannelMessages(ctx: Ctx, channelId: string, opts: { b
   const rows = await ctx.db
     .select({
       m: messages,
-      replyCount: dsql<number>`(select count(*)::int from messages r where r.thread_root_id = ${messages.id})`,
-      lastReplyAt: dsql<string | null>`(select max(r.created_at) from messages r where r.thread_root_id = ${messages.id})`,
+      // Explicitly qualified: an interpolated column renders unqualified here and would bind to the inner alias.
+      replyCount: dsql<number>`(select count(*)::int from messages r where r.thread_root_id = "messages"."id")`,
+      lastReplyAt: dsql<string | null>`(select max(r.created_at) from messages r where r.thread_root_id = "messages"."id")`,
     })
     .from(messages)
     .where(and(...conditions))

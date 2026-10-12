@@ -6,6 +6,8 @@ import { qk, useAuthState } from './lib/queries';
 import { realtime } from './lib/ws';
 import { pushToast } from './lib/toast';
 import { AppShell } from './components/layout/AppShell';
+import { ConversationList } from './components/layout/ConversationList';
+import { DESKTOP_QUERY, useMediaQuery } from './lib/hooks';
 import { Toaster } from './components/Toaster';
 import { ConfirmProvider } from './components/Modal';
 import { LoadingBlock, ErrorBlock } from './components/ui';
@@ -27,6 +29,12 @@ import { NotFoundPage } from './routes/NotFound';
 const ComputerPage = lazy(() => import('./routes/Computer'));
 const QuotaPage = lazy(() => import('./routes/Quota'));
 
+/** "/": the dashboard on desktop; on phones the conversation list is the home screen (dashboard at /accueil). */
+function HomeRoute() {
+  const desktop = useMediaQuery(DESKTOP_QUERY);
+  return desktop ? <HomePage /> : <ConversationList variant="page" />;
+}
+
 function Splash() {
   return (
     <div className="flex h-full items-center justify-center">
@@ -43,7 +51,7 @@ function useRealtime(enabled: boolean): void {
     realtime.start(qc, {
       onNudge: (n) => {
         const bot = qc.getQueryData<{ id: string; name: string }[]>(qk.bots)?.find((b) => b.id === n.botId);
-        pushToast({ level: 'info', title: `Relance${bot ? ` de ${bot.name}` : ''}`, body: n.title, url: '/' });
+        pushToast({ level: 'info', title: `Relance${bot ? ` de ${bot.name}` : ''}`, body: n.title, url: '/accueil' });
       },
     });
     return () => realtime.stop();
@@ -69,7 +77,8 @@ function ProtectedApp() {
     <AppShell>
       <Suspense fallback={<LoadingBlock />}>
         <Routes>
-          <Route path="/" element={<HomePage />} />
+          <Route path="/" element={<HomeRoute />} />
+          <Route path="/accueil" element={<HomePage />} />
           <Route path="/c/:channelId" element={<ConversationPage />} />
           <Route path="/c/:channelId/t/:messageId" element={<ConversationPage />} />
           <Route path="/bots" element={<BotsPage />} />

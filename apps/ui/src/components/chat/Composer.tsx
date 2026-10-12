@@ -1,8 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowUp } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowUp, AtSign, CalendarClock, FolderOpen, Monitor, Plus } from 'lucide-react';
 import type { BotDTO } from '@ant/shared';
 import { toast } from '../../lib/toast';
-import { Avatar, Spinner, cx } from '../ui';
+import { BotAvatar } from '../BotAvatar';
+import { useShell } from '../layout/shell';
+import { MenuItem, Popover } from '../Popover';
+import { Spinner, cx } from '../ui';
 import { applyMention, filterMentionCandidates, mentionAtCaret, type MentionQuery } from './mentions';
 import { draftKey, getDraft, setDraft, useSendMessage } from './useSendMessage';
 
@@ -14,16 +18,20 @@ export function Composer({
   members,
   placeholder,
   autoFocus = true,
-  compact = false,
+  routineBotId,
+  routineChannelId,
 }: {
   channelId: string;
   threadRootId?: string | null;
   members: BotDTO[];
   placeholder: string;
   autoFocus?: boolean;
-  /** Narrow panes (thread) hide the keyboard hints. */
-  compact?: boolean;
+  /** Prefill of "Créer une routine" in the + menu. */
+  routineBotId?: string;
+  routineChannelId?: string;
 }) {
+  const navigate = useNavigate();
+  const { openFiles, toggleComputer, computerOpen } = useShell();
   const key = draftKey(channelId, threadRootId);
   const [text, setText] = useState(() => getDraft(key));
   const [mention, setMention] = useState<MentionQuery | null>(null);
@@ -67,6 +75,25 @@ export function Composer({
     requestAnimationFrame(() => {
       el.focus();
       el.setSelectionRange(res.caret, res.caret);
+    });
+  };
+
+  /** "Mentionner un bot": inserts "@" at the caret and opens the autocomplete. */
+  const startMention = () => {
+    const el = ref.current;
+    const caret = el?.selectionStart ?? text.length;
+    const before = text.slice(0, caret);
+    const insert = before && !/[\s(]$/.test(before) ? ' @' : '@';
+    const value = before + insert + text.slice(caret);
+    const pos = caret + insert.length;
+    setText(value);
+    setDraft(key, value);
+    setActive(0);
+    requestAnimationFrame(() => {
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+      setMention(mentionAtCaret(value, pos));
     });
   };
 
@@ -115,14 +142,14 @@ export function Composer({
   };
 
   return (
-    <div className="safe-bottom shrink-0 px-3 pt-1 pb-3 md:px-5">
-      <div className="relative">
+    <div className="safe-bottom shrink-0 px-3 pt-1 pb-3 md:px-6 md:pb-5">
+      <div className="relative mx-auto w-full max-w-[880px]">
         {showMentions && (
           <ul
             id={listId}
             role="listbox"
             aria-label="Bots du canal"
-            className="absolute bottom-full left-0 z-20 mb-1 w-72 overflow-hidden rounded-[6px] border border-line bg-surface py-1 shadow-pop"
+            className="menu-panel absolute bottom-full left-0 z-20 mb-2 w-72"
           >
             {candidates.map((b, i) => (
               <li
@@ -135,16 +162,72 @@ export function Composer({
                   pick(b);
                 }}
                 onMouseEnter={() => setActive(i)}
-                className={cx('flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[13px]', i === active && 'bg-hover')}
+                className={cx('flex cursor-pointer items-center gap-2.5 rounded-[9px] px-2.5 py-1.5 text-[13.5px]', i === active && 'bg-hover')}
               >
-                <Avatar emoji={b.avatar} size="sm" />
+                <BotAvatar bot={b} size={22} />
                 <span className="font-medium">{b.name}</span>
                 <span className="text-subtle">@{b.slug}</span>
               </li>
             ))}
           </ul>
         )}
-        <div className="flex items-end gap-2 rounded-[6px] border border-line-strong bg-raised px-2 py-1.5 focus-within:border-accent focus-within:shadow-[0_0_0_2px_var(--ant-accent-soft)]">
+        <div className="flex items-end gap-1.5 rounded-[24px] border border-line bg-surface p-1.5 shadow-[0_1px_2px_rgb(0_0_0/0.12)] transition-colors focus-within:border-line-strong">
+          <Popover
+            label="Actions"
+            placement="top-start"
+            trigger={(p) => (
+              <button type="button" {...p} className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-hover hover:text-fg" aria-label="Plus d’actions">
+                <Plus className="size-[18px]" />
+              </button>
+            )}
+          >
+            {(close) => (
+              <>
+                {members.length > 1 && (
+                  <MenuItem
+                    icon={<AtSign />}
+                    onSelect={() => {
+                      close();
+                      startMention();
+                    }}
+                  >
+                    Mentionner un bot
+                  </MenuItem>
+                )}
+                {routineBotId && (
+                  <MenuItem
+                    icon={<CalendarClock />}
+                    onSelect={() => {
+                      close();
+                      const qs = new URLSearchParams({ new: '1', bot: routineBotId });
+                      if (routineChannelId) qs.set('channel', routineChannelId);
+                      navigate(`/routines?${qs.toString()}`);
+                    }}
+                  >
+                    Créer une routine
+                  </MenuItem>
+                )}
+                <MenuItem
+                  icon={<FolderOpen />}
+                  onSelect={() => {
+                    close();
+                    openFiles();
+                  }}
+                >
+                  Parcourir les fichiers
+                </MenuItem>
+                <MenuItem
+                  icon={<Monitor />}
+                  onSelect={() => {
+                    close();
+                    toggleComputer();
+                  }}
+                >
+                  {computerOpen ? 'Masquer l’ordinateur' : 'Ouvrir l’ordinateur'}
+                </MenuItem>
+              </>
+            )}
+          </Popover>
           <textarea
             ref={ref}
             rows={1}
@@ -154,31 +237,26 @@ export function Composer({
             aria-autocomplete="list"
             aria-controls={showMentions ? listId : undefined}
             aria-activedescendant={showMentions ? `${listId}-${active}` : undefined}
+            enterKeyHint="send"
             onChange={(e) => update(e.target.value, e.target.selectionStart ?? e.target.value.length)}
             onKeyDown={onKeyDown}
             onClick={(e) => setMention(mentionAtCaret(text, e.currentTarget.selectionStart ?? text.length))}
             onBlur={() => setTimeout(() => setMention(null), 120)}
-            className="max-h-[240px] min-h-[24px] flex-1 resize-none bg-transparent px-1 py-0.5 text-[14px] leading-[1.5] outline-none placeholder:text-subtle"
+            className="max-h-[240px] min-h-[36px] flex-1 resize-none bg-transparent px-1 py-[7px] text-[14.5px] leading-[1.5] outline-none placeholder:text-subtle"
           />
           <button
             type="button"
             onClick={submit}
             disabled={!text.trim() || send.isPending}
             aria-label="Envoyer"
-            className="btn btn-primary btn-sm btn-icon shrink-0"
+            title="Envoyer (Entrée) · Maj+Entrée pour une nouvelle ligne"
+            className={cx(
+              'flex size-9 shrink-0 items-center justify-center rounded-full transition-colors',
+              text.trim() ? 'bg-primary text-primary-fg hover:opacity-90' : 'bg-active text-subtle',
+            )}
           >
-            {send.isPending ? <Spinner className="size-3.5 text-accent-fg" /> : <ArrowUp className="size-4" />}
+            {send.isPending ? <Spinner className="size-4 text-current" /> : <ArrowUp className="size-[18px]" strokeWidth={2.4} />}
           </button>
-        </div>
-        <div className={cx('mt-1 hidden justify-between px-1 text-[11px] text-subtle', !compact && 'md:flex')}>
-          <span>
-            <span className="kbd">Entrée</span> envoyer · <span className="kbd">Maj</span>+<span className="kbd">Entrée</span> nouvelle ligne
-          </span>
-          {members.length > 1 && (
-            <span>
-              <span className="kbd">@</span> pour mentionner un bot
-            </span>
-          )}
         </div>
       </div>
     </div>

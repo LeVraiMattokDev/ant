@@ -9,8 +9,9 @@ import { toast } from '../lib/toast';
 import { BotForm } from '../components/bots/BotForm';
 import { NudgesPanel, RunsPanel, TasksPanel } from '../components/bots/BotSidePanels';
 import { useConfirm } from '../components/Modal';
-import { Avatar, EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner } from '../components/ui';
+import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner } from '../components/ui';
 import { BotStatus } from './Bots';
+import { BotAvatar } from '../components/BotAvatar';
 
 export function BotDetailPage() {
   const { botId } = useParams();
@@ -78,6 +79,7 @@ export function BotDetailPage() {
     <>
       <PageHeader
         title={isNew ? 'Nouveau bot' : (bot?.name ?? '')}
+        icon={bot ? <BotAvatar bot={bot} size={48} /> : undefined}
         description={
           bot ? (
             <span className="inline-flex items-center gap-2">
@@ -109,18 +111,13 @@ export function BotDetailPage() {
           </>
         }
       />
-      <div className="scroll-y flex-1 px-4 pt-5 md:px-6">
+      <div className="scroll-y flex-1 px-4 pt-2 md:px-8">
         <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
           <div className="min-w-0 flex-1">
-            {bot && (
-              <div className="mb-5 flex items-center gap-3 md:hidden">
-                <Avatar emoji={bot.avatar} size="lg" />
-                <div className="text-[13px] text-muted">{bot.role}</div>
-              </div>
-            )}
+            {bot && <p className="mb-5 max-w-2xl text-[13.5px] text-muted md:hidden">{bot.role}</p>}
             <BotForm key={bot?.id ?? 'new'} bot={bot} onSubmit={(input) => save.mutate(input)} saving={save.isPending} error={error} />
             {bot && (
-              <section className="mt-6 mb-8 max-w-2xl rounded-[6px] border border-danger/40 p-4">
+              <section className="mt-6 mb-8 max-w-2xl rounded-[12px] border border-danger/40 p-4">
                 <h2 className="text-[14px] font-semibold text-danger">Archiver ce bot</h2>
                 <p className="mt-1 text-[13px] text-muted">L’archivage est définitif depuis l’interface ; l’historique reste consultable.</p>
                 <button type="button" className="btn btn-danger mt-3" onClick={() => void onArchive()} disabled={archive.isPending}>

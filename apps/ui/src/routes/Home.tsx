@@ -9,8 +9,9 @@ import { qk, useActiveRuns, useBotMap, useBots, useChannels, useNudges, usePendi
 import { toast } from '../lib/toast';
 import { Markdown } from '../components/Markdown';
 import { useCancelRun } from '../components/chat/ActivityBar';
-import { Avatar, Badge, EmptyState, Gauge, PageHeader, Spinner, cx } from '../components/ui';
+import { Badge, EmptyState, Gauge, PageHeader, Spinner, cx } from '../components/ui';
 import { BotStatus } from './Bots';
+import { BotAvatar } from '../components/BotAvatar';
 
 function Card({ title, action, children, className }: { title: string; action?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
@@ -57,7 +58,7 @@ function NudgeItem({ nudge }: { nudge: NudgeDTO }) {
   return (
     <li className={cx('px-3.5 py-3', !open && 'opacity-60')}>
       <div className="flex items-center gap-2 text-[12px] text-muted">
-        <Avatar emoji={bot?.avatar} size="sm" />
+        <BotAvatar bot={bot} size={20} />
         <span className="font-medium text-fg">{bot?.name ?? 'Bot'}</span>
         <Badge tone="accent">{NUDGE_KIND_LABELS[nudge.kind] ?? nudge.kind}</Badge>
         <span className="ml-auto text-subtle">{formatShort(nudge.createdAt)}</span>
@@ -167,8 +168,8 @@ export function HomePage() {
   return (
     <>
       <PageHeader title="Accueil" description="Ce qui demande ton attention, et ce que font tes bots en ce moment." />
-      <div className="scroll-y flex-1 p-4 md:p-6">
-        <div className="mx-auto max-w-6xl space-y-4">
+      <div className="scroll-y flex-1 px-4 pb-8 md:px-8">
+        <div className="max-w-6xl space-y-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Stat label={urgent ? `Validations (dont ${urgent} urgente${urgent > 1 ? 's' : ''})` : 'Validations en attente'} value={pending.isPending ? '—' : pendingCount} to="/approvals" tone={pendingCount ? 'accent' : undefined} />
             <Stat label="Exécutions en cours" value={runs.data?.length ?? '—'} />
@@ -201,7 +202,7 @@ export function HomePage() {
                       const where = channelLabel(r.channelId);
                       return (
                         <li key={r.id} className="flex items-center gap-3 px-3.5 py-2.5">
-                          <Avatar emoji={bot?.avatar} />
+                          <BotAvatar bot={bot} size={32} />
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-baseline gap-x-2 text-[13.5px]">
                               <span className="font-medium">{bot?.name ?? 'Bot'}</span>
@@ -280,7 +281,7 @@ export function HomePage() {
                     {bots.data.map((b) => (
                       <li key={b.id}>
                         <Link to={`/c/${b.dmChannelId}`} className="flex items-center gap-2.5 px-3.5 py-2 hover:bg-hover">
-                          <Avatar emoji={b.avatar} size="sm" />
+                          <BotAvatar bot={b} size={26} />
                           <span className="text-[13.5px] font-medium">{b.name}</span>
                           <span className="ml-auto max-w-[55%] truncate">
                             <BotStatus bot={b} />

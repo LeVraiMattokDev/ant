@@ -12,6 +12,8 @@ export function Modal({
   children,
   footer,
   size = 'md',
+  variant = 'center',
+  description,
 }: {
   open: boolean;
   onClose: () => void;
@@ -19,6 +21,9 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   size?: 'sm' | 'md' | 'lg';
+  /** `drawer` slides in from the right edge, full height. */
+  variant?: 'center' | 'drawer';
+  description?: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -59,9 +64,13 @@ export function Modal({
 
   if (!open) return null;
   const width = size === 'sm' ? 'max-w-sm' : size === 'lg' ? 'max-w-2xl' : 'max-w-lg';
+  const drawer = variant === 'drawer';
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 sm:items-center sm:p-4"
+      className={cx(
+        'fixed inset-0 z-50 flex bg-black/55 backdrop-blur-[1px]',
+        drawer ? 'justify-end' : 'items-end justify-center sm:items-center sm:p-4',
+      )}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -72,20 +81,25 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={titleId}
         className={cx(
-          'flex max-h-[92dvh] w-full flex-col rounded-t-[8px] border border-line bg-surface shadow-pop sm:rounded-[8px]',
-          width,
+          'flex w-full flex-col border border-line bg-surface shadow-pop',
+          drawer
+            ? 'safe-top h-full max-w-[600px] sm:rounded-l-[20px]'
+            : cx('max-h-[92dvh] rounded-t-[20px] sm:rounded-[20px]', width),
         )}
       >
-        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-          <h2 id={titleId} className="text-[15px] font-semibold">
-            {title}
-          </h2>
-          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose} aria-label="Fermer">
+        <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
+          <div className="min-w-0">
+            <h2 id={titleId} className="text-[16px] font-semibold tracking-[-0.01em]">
+              {title}
+            </h2>
+            {description && <div className="mt-0.5 text-[12.5px] text-muted">{description}</div>}
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon -mr-1.5" onClick={onClose} aria-label="Fermer">
             <X className="size-4" />
           </button>
         </div>
-        <div className="scroll-y flex-1 px-4 py-4">{children}</div>
-        {footer && <div className="safe-bottom flex justify-end gap-2 border-t border-line px-4 py-2.5">{footer}</div>}
+        <div className={cx('scroll-y flex-1 px-5', drawer ? 'pb-5' : 'pb-5')}>{children}</div>
+        {footer && <div className="safe-bottom flex justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>}
       </div>
     </div>,
     document.body,

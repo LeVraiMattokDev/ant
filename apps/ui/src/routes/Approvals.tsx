@@ -41,7 +41,7 @@ export function ApprovalsPage() {
   return (
     <>
       <PageHeader title="Validations" description="Les actions sensibles des bots attendent ton accord. Rien n’est exécuté sans lui." />
-      <div className="px-4 md:px-6">
+      <div className="px-4 md:px-8">
         <Tabs<Tab>
           label="Validations"
           value={tab}
@@ -52,8 +52,8 @@ export function ApprovalsPage() {
           ]}
         />
       </div>
-      <div className="scroll-y flex-1 p-4 md:p-6">
-        <div className="mx-auto max-w-3xl">
+      <div className="scroll-y flex-1 px-4 pt-4 pb-8 md:px-8">
+        <div className="max-w-3xl">
           {query.isPending ? (
             <LoadingBlock />
           ) : query.isError ? (

@@ -14,7 +14,7 @@ import { SensitiveDomains } from '../components/settings/SensitiveDomains';
 import { SecuritySection } from '../components/settings/SecuritySection';
 import { NotificationsSection } from '../components/settings/NotificationsSection';
 import { settingsDiff, useUpdateSettings } from '../components/settings/useUpdateSettings';
-import { ErrorBlock, Field, LoadingBlock, PageHeader, Spinner, Toggle, cx } from '../components/ui';
+import { ErrorBlock, Field, LoadingBlock, PageHeader, Spinner, Toggle } from '../components/ui';
 
 function timeZones(): string[] {
   try {
@@ -43,7 +43,7 @@ function validate(s: SettingsDTO): string | null {
 function ThemeToggle() {
   const [theme, setTheme] = useTheme();
   return (
-    <div className="inline-flex rounded-[4px] border border-line-strong p-0.5" role="radiogroup" aria-label="Thème">
+    <div className="segmented" role="radiogroup" aria-label="Thème">
       {(['dark', 'light'] as const).map((t) => (
         <button
           key={t}
@@ -51,7 +51,6 @@ function ThemeToggle() {
           role="radio"
           aria-checked={theme === t}
           onClick={() => setTheme(t)}
-          className={cx('flex h-7 items-center gap-1.5 rounded-[3px] px-3 text-[13px]', theme === t ? 'bg-active text-fg' : 'text-muted hover:text-fg')}
         >
           {t === 'dark' ? <Moon className="size-3.5" /> : <Sun className="size-3.5" />}
           {t === 'dark' ? 'Sombre' : 'Clair'}
@@ -206,7 +205,7 @@ function GeneralSettings({ settings }: { settings: SettingsDTO }) {
       </SettingsSection>
 
       {dirty && (
-        <div className="sticky bottom-0 z-10 -mx-4 flex flex-wrap items-center gap-3 border-t border-line bg-surface px-4 py-3 md:-mx-6 md:px-6">
+        <div className="sticky bottom-0 z-10 -mx-4 flex flex-wrap items-center gap-3 border-t border-line bg-surface px-4 py-3 md:-mx-8 md:px-8">
           <span className="text-[13px] text-muted">{error ?? 'Modifications non enregistrées'}</span>
           <div className="ml-auto flex gap-2">
             <button type="button" className="btn" onClick={() => setDraft(settings)}>
@@ -248,8 +247,8 @@ export function SettingsPage() {
           </button>
         }
       />
-      <div className="scroll-y flex-1 px-4 md:px-6">
-        <div className="mx-auto max-w-5xl">
+      <div className="scroll-y flex-1 px-4 md:px-8">
+        <div className="max-w-5xl">
           {settings.isPending ? (
             <LoadingBlock />
           ) : settings.isError ? (

@@ -3,7 +3,9 @@ import { MODEL_LABELS, type BotDTO } from '@ant/shared';
 import { formatTokens, formatUsd } from '../../lib/format';
 import { useBotMap, useUsage } from '../../lib/queries';
 import { bucketByDay, groupUsage, type GroupRow, type UsageMetric } from '../../lib/usage';
-import { ErrorBlock, LoadingBlock, cx } from '../ui';
+import { ErrorBlock, LoadingBlock } from '../ui';
+import { BotAvatar } from '../BotAvatar';
+import type { ReactNode } from 'react';
 import { UsageChart } from './UsageChart';
 
 function Segmented<T extends string | number>({
@@ -18,7 +20,7 @@ function Segmented<T extends string | number>({
   label: string;
 }) {
   return (
-    <div className="inline-flex rounded-[4px] border border-line-strong p-0.5" role="radiogroup" aria-label={label}>
+    <div className="segmented" role="radiogroup" aria-label={label}>
       {options.map((o) => (
         <button
           key={String(o.value)}
@@ -26,7 +28,6 @@ function Segmented<T extends string | number>({
           role="radio"
           aria-checked={value === o.value}
           onClick={() => onChange(o.value)}
-          className={cx('h-6 rounded-[3px] px-2.5 text-[12.5px]', value === o.value ? 'bg-active text-fg' : 'text-muted hover:text-fg')}
         >
           {o.label}
         </button>
@@ -35,14 +36,14 @@ function Segmented<T extends string | number>({
   );
 }
 
-function GroupTable({ title, rows, labelOf }: { title: string; rows: GroupRow[]; labelOf: (key: string) => string }) {
+function GroupTable({ title, rows, labelOf }: { title: string; rows: GroupRow[]; labelOf: (key: string) => ReactNode }) {
   return (
     <div className="min-w-0">
       <h3 className="mb-2 text-[13px] font-semibold">{title}</h3>
       {rows.length === 0 ? (
         <p className="text-[13px] text-subtle">Aucune consommation sur la période.</p>
       ) : (
-        <div className="overflow-x-auto rounded-[6px] border border-line">
+        <div className="overflow-x-auto rounded-[12px] border border-line">
           <table className="w-full text-[12.5px]">
             <thead className="bg-surface text-left text-subtle">
               <tr>
@@ -73,10 +74,16 @@ function GroupTable({ title, rows, labelOf }: { title: string; rows: GroupRow[];
   );
 }
 
-function botLabel(bots: Map<string, BotDTO>, key: string): string {
+function botLabel(bots: Map<string, BotDTO>, key: string): ReactNode {
   if (key === '__none') return 'Système (tri, résumés)';
   const b = bots.get(key);
-  return b ? `${b.avatar} ${b.name}` : 'Bot archivé';
+  if (!b) return 'Bot archivé';
+  return (
+    <span className="inline-flex items-center gap-2">
+      <BotAvatar bot={b} size={18} />
+      {b.name}
+    </span>
+  );
 }
 
 export function UsageSection() {
@@ -149,7 +156,7 @@ export function UsageSection() {
           </div>
           <details className="mt-2">
             <summary className="cursor-pointer text-[12.5px] text-muted hover:text-fg">Voir les données jour par jour</summary>
-            <div className="mt-2 max-h-72 overflow-auto rounded-[6px] border border-line">
+            <div className="mt-2 max-h-72 overflow-auto rounded-[12px] border border-line">
               <table className="w-full text-[12.5px]">
                 <thead className="sticky top-0 bg-surface text-left text-subtle">
                   <tr>

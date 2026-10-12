@@ -5,7 +5,7 @@ import { formatDayHeader, isSameDay } from '../../lib/format';
 import { useChannelMessages } from '../../lib/queries';
 import { markRead } from '../../lib/unread';
 import { ErrorBlock, LoadingBlock, Spinner } from '../ui';
-import { MessageItem } from './MessageItem';
+import { KIND_CHIPS, MessageItem } from './MessageItem';
 import { isSystemStyled } from './SystemMessage';
 
 const NEAR_BOTTOM_PX = 140;
@@ -15,6 +15,7 @@ function isGrouped(prev: MessageDTO | undefined, m: MessageDTO): boolean {
   if (!prev || isSystemStyled(prev) || isSystemStyled(m)) return false;
   if (prev.authorKind !== m.authorKind || prev.botId !== m.botId) return false;
   if (prev.replyCount > 0) return false;
+  if (m.meta.kind && KIND_CHIPS[m.meta.kind]) return false;
   if (!isSameDay(prev.createdAt, m.createdAt)) return false;
   return new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() < GROUP_WINDOW_MS;
 }
@@ -142,24 +143,22 @@ export function MessageList({
         </div>
       )}
       {!query.hasNextPage && messages.length > 0 && (
-        <div className="px-5 pt-6 pb-2 text-center text-[12px] text-subtle">Début de la conversation</div>
+        <div className="px-5 pt-8 pb-1 text-center text-[12px] text-subtle">Début de la conversation</div>
       )}
       {messages.length === 0 ? (
         empty
       ) : (
-        <div ref={content} className="pb-3">
+        <div ref={content} className="mx-auto w-full max-w-[880px] pb-6">
           {messages.map((m, i) => {
             const prev = messages[i - 1];
             const newDay = !prev || !isSameDay(prev.createdAt, m.createdAt);
             return (
               <Fragment key={m.id}>
                 {newDay && (
-                  <div className="sticky top-0 z-[1] flex items-center gap-3 bg-bg/95 px-5 py-2" role="separator">
-                    <div className="h-px flex-1 bg-line" />
-                    <span className="rounded-full border border-line bg-bg px-2.5 py-0.5 text-[11.5px] font-medium text-muted">
+                  <div className="flex justify-center px-5 pt-6 pb-1" role="separator" aria-label={formatDayHeader(m.createdAt)}>
+                    <span className="rounded-full px-3 py-0.5 text-[11.5px] font-medium text-subtle">
                       {formatDayHeader(m.createdAt)}
                     </span>
-                    <div className="h-px flex-1 bg-line" />
                   </div>
                 )}
                 <MessageItem

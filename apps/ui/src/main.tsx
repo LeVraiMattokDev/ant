@@ -5,6 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { App } from './App';
 import { createQueryClient } from './lib/queries';
 import { registerServiceWorker } from './lib/sw-register';
+import '@fontsource-variable/inter/wght.css';
 import './index.css';
 
 const queryClient = createQueryClient();

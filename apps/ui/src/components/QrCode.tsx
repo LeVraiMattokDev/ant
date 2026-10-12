@@ -15,7 +15,7 @@ export function QrCode({ text, size = 184, label }: { text: string; size?: numbe
     return { path: d, n: count + 8 };
   }, [text]);
   return (
-    <svg role="img" aria-label={label} width={size} height={size} viewBox={`0 0 ${n} ${n}`} shapeRendering="crispEdges" className="rounded-[4px]">
+    <svg role="img" aria-label={label} width={size} height={size} viewBox={`0 0 ${n} ${n}`} shapeRendering="crispEdges" className="rounded-[8px]">
       <rect width={n} height={n} fill="#ffffff" />
       <path d={path} fill="#111111" />
     </svg>

@@ -7,7 +7,7 @@ export function RecoveryCodes({ codes }: { codes: string[] }) {
   const text = codes.join('\n');
   return (
     <div>
-      <ol className="mono grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-[6px] border border-line bg-bg p-4 text-[13.5px]">
+      <ol className="mono grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-[12px] border border-line bg-bg p-4 text-[13.5px]">
         {codes.map((c, i) => (
           <li key={c} className="flex gap-2">
             <span className="w-5 text-right text-subtle">{i + 1}.</span>

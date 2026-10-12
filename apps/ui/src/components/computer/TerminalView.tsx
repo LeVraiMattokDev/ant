@@ -99,7 +99,7 @@ export function TerminalView({ interactive }: { interactive: boolean }) {
   }, [interactive]);
 
   return (
-    <div className="flex h-full min-h-[280px] flex-col overflow-hidden rounded-[6px] border border-line bg-bg">
+    <div className="flex h-full min-h-[280px] flex-col overflow-hidden rounded-[12px] border border-line bg-bg">
       <div className="flex items-center gap-2 border-b border-line px-3 py-1.5 text-[12px] text-muted">
         <span className={status === 'open' ? 'text-success' : status === 'connecting' ? 'text-warning' : 'text-danger'}>●</span>
         {status === 'open' ? 'Terminal connecté' : status === 'connecting' ? 'Connexion…' : 'Déconnecté, nouvelle tentative…'}

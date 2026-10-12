@@ -4,8 +4,9 @@ import { APPROVAL_CATEGORY_LABELS, type ApprovalDTO, type ApprovalStatus, type B
 import { APPROVAL_STATUS_LABELS } from '../../lib/labels';
 import { formatFull, formatRelative } from '../../lib/format';
 import { Markdown } from '../Markdown';
-import { Avatar, Badge, Spinner, cx } from '../ui';
+import { Badge, Spinner, cx } from '../ui';
 import { useDecideApproval } from './useDecideApproval';
+import { BotAvatar } from '../BotAvatar';
 
 const STATUS_TONE: Record<ApprovalStatus, 'accent' | 'success' | 'danger' | 'neutral' | 'info' | 'warning'> = {
   pending: 'accent',
@@ -66,7 +67,7 @@ export function ApprovalCard({
         </div>
         {bot && (
           <Link to={`/bots/${bot.id}`} className="flex items-center gap-1.5 text-[13px] text-muted hover:text-fg">
-            <Avatar emoji={bot.avatar} size="sm" />
+            <BotAvatar bot={bot} size={20} />
             {bot.name}
           </Link>
         )}
@@ -81,12 +82,12 @@ export function ApprovalCard({
               src={`/api/approvals/${approval.id}/screenshot`}
               alt={`Capture d’écran pour « ${approval.title} »`}
               loading="lazy"
-              className={cx('w-full rounded-[4px] border border-line object-contain object-top', compact ? 'max-h-48' : 'max-h-96')}
+              className={cx('w-full rounded-[8px] border border-line object-contain object-top', compact ? 'max-h-48' : 'max-h-96')}
             />
           </a>
         )}
 
-        <details className="group rounded-[4px] border border-line bg-bg">
+        <details className="group rounded-[8px] border border-line bg-bg">
           <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[12.5px] text-muted hover:text-fg">
             Paramètres exacts <span className="mono text-subtle">({approval.tool})</span>
           </summary>
@@ -112,7 +113,7 @@ export function ApprovalCard({
         </div>
 
         {!pending && (approval.comment || approval.result) && (
-          <div className="space-y-1 rounded-[4px] bg-raised px-2.5 py-2 text-[13px]">
+          <div className="space-y-1 rounded-[8px] bg-raised px-2.5 py-2 text-[13px]">
             {approval.comment && (
               <div>
                 <span className="text-muted">Ton commentaire : </span>
