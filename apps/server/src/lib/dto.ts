@@ -37,7 +37,7 @@ export function botToDTO(row: Row<typeof bots>, dmChannelId: string, activity: s
   };
 }
 
-export function channelToDTO(row: Row<typeof channels>, botIds: string[]): ChannelDTO {
+export function channelToDTO(row: Row<typeof channels>, botIds: string[], lastMessage: ChannelDTO['lastMessage'] = null): ChannelDTO {
   return {
     id: row.id,
     kind: row.kind,
@@ -46,6 +46,7 @@ export function channelToDTO(row: Row<typeof channels>, botIds: string[]): Chann
     botIds,
     dmBotId: row.dmBotId ?? null,
     lastMessageAt: iso(row.lastMessageAt),
+    lastMessage,
     createdAt: row.createdAt.toISOString(),
   };
 }

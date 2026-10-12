@@ -135,6 +135,8 @@ describe.skipIf(!hasDb)('web API', () => {
     expect(job?.lane).toBe(`run:${bot.id}:${bot.dmChannelId}`);
     const list = (await get(`/api/channels/${bot.dmChannelId}/messages`)).json();
     expect(list[0].content).toBe('Bonjour');
+    const preview = ((await get('/api/channels')).json() as { id: string; lastMessage: { content: string } | null }[]).find((c) => c.id === bot.dmChannelId);
+    expect(preview?.lastMessage?.content).toBe('Bonjour');
     const search = (await get('/api/search?q=bonjour')).json();
     expect(search).toHaveLength(1);
   });

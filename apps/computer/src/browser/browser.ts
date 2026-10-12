@@ -76,9 +76,21 @@ export class BrowserManager {
       ...(this.cfg.headless ? { channel: 'chromium' } : {}),
       ...(this.cfg.browserExecutablePath ? { executablePath: this.cfg.browserExecutablePath } : {}),
       viewport: { ...VIEWPORT },
-      args: ['--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage'],
-      // No « controlled by automated test software » banner (it covers the page and some sites react to it).
+      args: [
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-dev-shm-usage',
+        // This browser is the owner's own: it must look like a normal Chrome so sites (X, Google…) accept
+        // interactive logins. navigator.webdriver stays false and no automation banner covers the page.
+        '--disable-blink-features=AutomationControlled',
+        // The container is the sandbox (no Chromium sandbox without user namespaces): hide the
+        // « unsupported command-line flag: --no-sandbox » banner, which covers the page in the live view.
+        '--test-type',
+        '--lang=fr-CH',
+      ],
       ignoreDefaultArgs: ['--enable-automation'],
+      locale: 'fr-CH',
+      ...(process.env.TZ ? { timezoneId: process.env.TZ } : {}),
       // Minimal environment: the browser (exposed to the web) never sees the service's secrets.
       env: agentEnv(this.cfg, { XDG_CONFIG_HOME: `${this.cfg.agentHome}/.config`, XDG_CACHE_HOME: `${this.cfg.agentHome}/.cache` }),
       handleSIGINT: false,

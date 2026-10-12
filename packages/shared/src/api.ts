@@ -126,6 +126,8 @@ export interface ChannelDTO {
   botIds: string[];
   dmBotId: string | null;
   lastMessageAt: ISODate | null;
+  /** Latest top-level message, for the conversation list preview. */
+  lastMessage: { content: string; authorKind: AuthorKind; botId: string | null; createdAt: ISODate } | null;
   createdAt: ISODate;
 }
 

@@ -43,6 +43,10 @@ describe.skipIf(!chromiumAvailable())('browser (headless Chromium)', () => {
   beforeAll(async () => {
     site = createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      if (req.url === '/webdriver') {
+        res.end('<title>wd</title><p id="wd"></p><script>document.getElementById("wd").textContent = "webdriver=" + navigator.webdriver + " lang=" + navigator.language;</script>');
+        return;
+      }
       res.end(req.url === '/second' ? '<title>Deuxième</title><p>Seconde page</p>' : PAGE);
     });
     siteUrl = await listen(site);
@@ -65,6 +69,13 @@ describe.skipIf(!chromiumAvailable())('browser (headless Chromium)', () => {
     expect(r.status).toBe(200);
     return r.body;
   };
+
+  it('looks like a normal browser to websites (no webdriver flag, French locale)', async () => {
+    await act({ action: 'goto', url: `${siteUrl}/webdriver` });
+    const r = await act({ action: 'read' });
+    expect(r.text).toContain('webdriver=false');
+    expect(r.text).toContain('lang=fr-CH');
+  });
 
   it('goto refuses non-http URLs', async () => {
     const r = await act({ action: 'goto', url: 'file:///etc/passwd' });

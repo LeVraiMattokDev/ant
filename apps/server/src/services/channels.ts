@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
-import type { ChannelDTO, ChannelInput } from '@ant/shared';
+import type { AuthorKind, ChannelDTO, ChannelInput } from '@ant/shared';
 import { bots, channelMembers, channels } from '../db/schema';
 import { channelToDTO } from '../lib/dto';
 import { HttpError } from '../lib/errors';
@@ -31,7 +31,21 @@ export async function listChannels(ctx: Ctx): Promise<ChannelDTO[]> {
     .select({ channelId: channelMembers.channelId, botId: channelMembers.botId })
     .from(channelMembers)
     .where(inArray(channelMembers.channelId, rows.map((r) => r.id)));
-  return rows.map((r) => channelToDTO(r, members.filter((m) => m.channelId === r.id).map((m) => m.botId)));
+  const ids = rows.map((r) => r.id);
+  const latest = await ctx.sql<{ channel_id: string; content: string; author_kind: AuthorKind; bot_id: string | null; created_at: Date }[]>`
+    select distinct on (channel_id) channel_id, left(content, 300) as content, author_kind, bot_id, created_at
+    from messages
+    where channel_id = any(${ctx.sql.array(ids)}::uuid[]) and thread_root_id is null and status <> 'streaming'
+    order by channel_id, created_at desc`;
+  const byChannel = new Map(latest.map((m) => [m.channel_id, m]));
+  return rows.map((r) => {
+    const m = byChannel.get(r.id);
+    return channelToDTO(
+      r,
+      members.filter((x) => x.channelId === r.id).map((x) => x.botId),
+      m ? { content: m.content, authorKind: m.author_kind, botId: m.bot_id, createdAt: new Date(m.created_at).toISOString() } : null,
+    );
+  });
 }
 
 async function assertBots(ctx: Ctx, botIds: string[]): Promise<void> {
