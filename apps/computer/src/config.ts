@@ -9,7 +9,11 @@ export interface Config {
   /** Optional Chromium binary (otherwise the one installed by Playwright). */
   browserExecutablePath: string | undefined;
   display: string;
-  vncPort: number;
+  /**
+   * Unix socket of x11vnc (see entrypoint.sh). Never a TCP port: Chromium shares the container's
+   * network stack, so any visited page could otherwise reach an unauthenticated RFB server.
+   */
+  vncSocket: string;
   headless: boolean;
   maxOutputBytes: number;
   /** HOME given to commands, the terminal and Chromium. */
@@ -19,6 +23,9 @@ export interface Config {
 export class ConfigError extends Error {}
 
 export const MIN_TOKEN_LENGTH = 24;
+
+/** Same default as entrypoint.sh. */
+export const DEFAULT_VNC_SOCKET = '/tmp/.ant-vnc/vnc.sock';
 
 function int(name: string, raw: string | undefined, fallback: number, min: number, max: number): number {
   if (raw === undefined || raw.trim() === '') return fallback;
@@ -45,7 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     browserProfileDir: path.resolve(env.BROWSER_PROFILE_DIR?.trim() || '/home/agent/.ant-browser'),
     browserExecutablePath: env.BROWSER_EXECUTABLE_PATH?.trim() || undefined,
     display,
-    vncPort: int('VNC_PORT', env.VNC_PORT, 5900, 1, 65535),
+    vncSocket: path.resolve(env.VNC_SOCKET?.trim() || DEFAULT_VNC_SOCKET),
     headless: env.BROWSER_HEADLESS === '1' || env.BROWSER_HEADLESS === 'true',
     maxOutputBytes: int('MAX_OUTPUT_BYTES', env.MAX_OUTPUT_BYTES, 100_000, 1_000, 50_000_000),
     agentHome: '/home/agent',

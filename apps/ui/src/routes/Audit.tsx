@@ -2,9 +2,11 @@ import { Fragment, useState } from 'react';
 import { ChevronDown, ChevronRight, Download } from 'lucide-react';
 import type { AuditEntryDTO } from '@ant/shared';
 import { formatFull, formatShort } from '../lib/format';
-import { useDebouncedValue } from '../lib/hooks';
-import { useAudit } from '../lib/queries';
+import { useAudit, useBots } from '../lib/queries';
+import { AUDIT_ACTOR_LABELS, auditEventLabel, auditEventOptions, auditOutcomeLabel, formatActor } from '../components/audit/labels';
 import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner, cx } from '../components/ui';
+
+const EVENT_OPTIONS = auditEventOptions();
 
 function outcomeTone(outcome: string | null): string {
   if (!outcome) return 'text-subtle';
@@ -22,6 +24,10 @@ function DetailRow({ entry }: { entry: AuditEntryDTO }) {
           <dd className="mono">{entry.id}</dd>
           <dt className="text-subtle">Date</dt>
           <dd>{formatFull(entry.at)}</dd>
+          <dt className="text-subtle">Clé d’événement</dt>
+          <dd className="mono">{entry.event}</dd>
+          <dt className="text-subtle">Acteur (technique)</dt>
+          <dd className="mono break-all">{entry.actor}</dd>
           {entry.runId && (
             <>
               <dt className="text-subtle">Exécution</dt>
@@ -48,8 +54,10 @@ export function AuditPage() {
   const [actor, setActor] = useState('');
   const [days, setDays] = useState(30);
   const [open, setOpen] = useState<Set<number>>(new Set());
-  const filters = { event: useDebouncedValue(event.trim(), 350) || undefined, actor: useDebouncedValue(actor.trim(), 350) || undefined };
+  // The API filters on exact keys: the lists offer the values the server writes.
+  const filters = { event: event || undefined, actor: actor || undefined };
   const audit = useAudit(filters);
+  const bots = useBots();
   const rows = audit.data?.pages.flat() ?? [];
 
   const toggle = (id: number) =>
@@ -81,8 +89,27 @@ export function AuditPage() {
         }
       />
       <div className="flex flex-wrap gap-2 border-b border-line px-4 pb-3 md:px-8">
-        <input className="input w-full sm:w-56" placeholder="Événement (ex. tool.call)" aria-label="Filtrer par événement" value={event} onChange={(e) => setEvent(e.target.value)} />
-        <input className="input w-full sm:w-56" placeholder="Acteur (ex. bot:dev, owner)" aria-label="Filtrer par acteur" value={actor} onChange={(e) => setActor(e.target.value)} />
+        <select className="select w-full sm:w-64" aria-label="Filtrer par événement" value={event} onChange={(e) => setEvent(e.target.value)}>
+          <option value="">Tous les événements</option>
+          {EVENT_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <select className="select w-full sm:w-56" aria-label="Filtrer par acteur" value={actor} onChange={(e) => setActor(e.target.value)}>
+          <option value="">Tous les acteurs</option>
+          {Object.entries(AUDIT_ACTOR_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+          {(bots.data ?? []).map((b) => (
+            <option key={b.id} value={`bot:${b.slug}`}>
+              {b.name}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="scroll-y flex-1">
         {audit.isPending ? (
@@ -131,10 +158,16 @@ export function AuditPage() {
                           <td className="px-2 py-1.5 whitespace-nowrap" title={formatFull(r.at)}>
                             {formatShort(r.at)}
                           </td>
-                          <td className="mono px-2 py-1.5 whitespace-nowrap">{r.actor}</td>
-                          <td className="mono px-2 py-1.5">{r.event}</td>
+                          <td className="px-2 py-1.5 whitespace-nowrap" title={r.actor}>
+                            {formatActor(r.actor, bots.data)}
+                          </td>
+                          <td className="px-2 py-1.5" title={r.event}>
+                            {auditEventLabel(r.event)}
+                          </td>
                           <td className="mono px-2 py-1.5 text-muted">{r.tool ?? '—'}</td>
-                          <td className={cx('px-4 py-1.5', outcomeTone(r.outcome))}>{r.outcome ?? '—'}</td>
+                          <td className={cx('px-4 py-1.5', outcomeTone(r.outcome))} title={r.outcome ?? undefined}>
+                            {r.outcome ? auditOutcomeLabel(r.outcome) : '—'}
+                          </td>
                         </tr>
                         {expanded && <DetailRow entry={r} />}
                       </Fragment>

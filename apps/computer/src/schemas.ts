@@ -37,6 +37,8 @@ export const fileDeleteSchema = z.object({ path: path.min(1) });
 const target = {
   ref: z.string().max(32).optional(),
   selector: z.string().max(2000).optional(),
+  /** From a previous `inspect` (format checked by `pinSelector`). */
+  pin: z.string().max(64).optional(),
 };
 
 export const browserSchema = z.object({

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Search as SearchIcon } from 'lucide-react';
-import type { SearchResultDTO } from '@ant/shared';
+import type { ChannelDTO, SearchResultDTO } from '@ant/shared';
 import { parseSnippet } from '../lib/cache';
 import { stripMarkdown } from '../lib/preview';
 import { formatFull, formatShort } from '../lib/format';
@@ -21,6 +21,18 @@ function resultLink(r: SearchResultDTO): string {
   const m = r.message;
   if (m.threadRootId) return `/c/${m.channelId}/t/${m.threadRootId}`;
   return `/c/${m.channelId}?m=${m.id}`;
+}
+
+/**
+ * Where a result was written. A DM is stored under the bot's name, which would repeat the author ("Xena Xena"):
+ * the bot's own replies read "en privé", other messages "en privé avec Xena"; teams get their "#".
+ */
+export function resultPlace(r: SearchResultDTO, channels: ChannelDTO[] | undefined, nameOf: (channelId: string) => string): string {
+  const ch = channels?.find((c) => c.id === r.message.channelId);
+  if (!ch) return r.channelName;
+  if (ch.kind !== 'dm') return `#${ch.name}`;
+  if (r.message.authorKind === 'bot' && r.message.botId === ch.dmBotId) return 'en privé';
+  return `en privé avec ${nameOf(ch.id) || ch.name}`;
 }
 
 /** "2025-03-01" (date input) → ISO at local midnight; `end` → end of that day. */
@@ -91,8 +103,8 @@ export function SearchPage() {
           </button>
         </form>
         <div className="mt-2 grid grid-cols-2 gap-2 md:flex md:flex-wrap">
-          <select className="select md:w-48" aria-label="Filtrer par canal" value={channelId} onChange={(e) => setParam('channel', e.target.value)}>
-            <option value="">Tous les canaux</option>
+          <select className="select md:w-48" aria-label="Filtrer par conversation" value={channelId} onChange={(e) => setParam('channel', e.target.value)}>
+            <option value="">Toutes les conversations</option>
             {(channels.data ?? []).map((c) => (
               <option key={c.id} value={c.id}>
                 {channelName(c.id)}
@@ -136,6 +148,7 @@ export function SearchPage() {
               {search.data.map((r) => {
                 const bot = r.message.botId ? bots.get(r.message.botId) : undefined;
                 const author = r.message.authorKind === 'user' ? 'Toi' : r.message.authorKind === 'system' ? 'Système' : (bot?.name ?? 'Bot');
+                const where = resultPlace(r, channels.data, channelName);
                 return (
                   <li key={r.message.id}>
                     <Link to={resultLink(r)} className="flex gap-3 rounded-[14px] px-3 py-3 hover:bg-hover">
@@ -143,7 +156,7 @@ export function SearchPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-baseline gap-x-2 text-[12.5px]">
                           <span className="font-semibold">{author}</span>
-                          <span className="text-muted">{r.channelName}</span>
+                          <span className="text-muted">{where}</span>
                           {r.message.threadRootId && <span className="text-subtle">dans un fil</span>}
                           <time className="text-subtle" dateTime={r.message.createdAt} title={formatFull(r.message.createdAt)}>
                             {formatShort(r.message.createdAt)}

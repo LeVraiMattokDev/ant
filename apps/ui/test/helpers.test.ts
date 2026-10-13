@@ -81,6 +81,14 @@ describe('markdown', () => {
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');
   });
+
+  it('shows handles exactly as written (case, underscores)', () => {
+    expect(renderMarkdown('[@0xPaulvibe](https://x.com/0xPaulvibe)')).toContain('<span class="mention">@0xPaulvibe</span>');
+    expect(renderMarkdown('Salut @rehan_shei !')).toContain('<span class="mention">@rehan_shei</span> !');
+    expect(renderMarkdown('**@kozmo_app**')).toContain('<strong><span class="mention">@kozmo_app</span></strong>');
+    expect(renderMarkdown('ping @Dev.')).toContain('<span class="mention">@Dev</span>.');
+    expect(renderMarkdown('écris à a@b.com')).not.toContain('class="mention"');
+  });
 });
 
 describe('misc helpers', () => {

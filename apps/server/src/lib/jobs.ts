@@ -47,11 +47,20 @@ export async function enqueue(db: Db, kind: JobKind, payload: Record<string, unk
   return rows[0]?.id ?? null;
 }
 
+export interface ClaimOptions {
+  /**
+   * Only claim `bot.run` jobs of interactive runs (the owner's own requests); other kinds are unaffected.
+   * Lets the worker keep its last agent slot free for the owner while background work occupies the others.
+   */
+  onlyInteractive?: boolean;
+}
+
 /**
  * Claims at most one due job among `kinds`, never two jobs of the same lane at once.
- * Claims are serialised with a transaction-scoped advisory lock.
+ * `bot.run` jobs are taken by the priority of their run (interactive, then normal, then background),
+ * then in due order; other kinds keep their due order. Claims are serialised with a transaction-scoped advisory lock.
  */
-export async function claimJob(sql: Sql, workerId: string, kinds: readonly JobKind[]): Promise<JobRow | null> {
+export async function claimJob(sql: Sql, workerId: string, kinds: readonly JobKind[], opts: ClaimOptions = {}): Promise<JobRow | null> {
   if (kinds.length === 0) return null;
   const rows = await sql.begin(async (tx) => {
     await tx`select pg_advisory_xact_lock(4242)`;
@@ -61,13 +70,18 @@ export async function claimJob(sql: Sql, workerId: string, kinds: readonly JobKi
       update jobs set status = 'running', locked_at = now(), locked_by = ${workerId}, attempts = attempts + 1
       where id = (
         select j.id from jobs j
+        left join runs ru on j.kind = 'bot.run'
+          and ru.id = case when j.payload->>'runId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                           then (j.payload->>'runId')::uuid end
         where j.status = 'pending' and j.run_at <= now() and j.kind = any(${tx.array(kinds as string[])})
           and (j.lane is null or not exists (
             select 1 from jobs r where r.lane = j.lane and r.status = 'running'
           ))
-        order by j.run_at, j.created_at
+          ${opts.onlyInteractive ? tx`and (j.kind <> 'bot.run' or ru.priority = 'interactive')` : tx``}
+        order by case ru.priority when 'interactive' then 0 when 'normal' then 1 when 'background' then 2 else 1 end,
+                 j.run_at, j.created_at
         limit 1
-        for update skip locked
+        for update of j skip locked
       )
       returning id, kind, payload, attempts, max_attempts, lane`;
   });
@@ -112,11 +126,25 @@ export async function deferJob(db: Db, id: string, runAt: Date, reason: string):
     .where(eq(jobs.id, id));
 }
 
-/** At worker start-up: jobs left `running` by a crashed process go back to the queue. */
+export const INTERRUPTED_JOB_ERROR = 'interrompu par un redémarrage du worker';
+
+/**
+ * At worker start-up: jobs left `running` by a dead process go back to the queue, unless they have used
+ * all their attempts. Those fail instead: a job that kills the worker is not retried forever, and a
+ * `maxAttempts: 1` job (approved action, digest, heartbeat) is never replayed after it may have had its effect.
+ * Returns the number of jobs recovered (re-queued or failed).
+ */
 export async function recoverStaleJobs(db: Db, olderThan: Date): Promise<number> {
+  const exhausted = dsql`${jobs.attempts} >= ${jobs.maxAttempts}`;
   const rows = await db
     .update(jobs)
-    .set({ status: 'pending', lockedAt: null, lockedBy: null })
+    .set({
+      status: dsql`case when ${exhausted} then 'failed' else 'pending' end`,
+      finishedAt: dsql`case when ${exhausted} then now() end`,
+      lastError: INTERRUPTED_JOB_ERROR,
+      lockedAt: null,
+      lockedBy: null,
+    })
     .where(and(eq(jobs.status, 'running'), lt(jobs.lockedAt, olderThan)))
     .returning({ id: jobs.id });
   return rows.length;

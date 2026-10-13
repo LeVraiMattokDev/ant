@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import type { BotDTO, MessageDTO } from '@ant/shared';
 import { flattenMessages } from '../../lib/cache';
 import { formatDayHeader, isSameDay } from '../../lib/format';
-import { useChannelMessages } from '../../lib/queries';
+import { useChannelMessages, useChannels } from '../../lib/queries';
 import { markRead } from '../../lib/unread';
 import { ErrorBlock, LoadingBlock, Spinner } from '../ui';
 import { KIND_CHIPS, MessageItem } from './MessageItem';
@@ -41,13 +41,18 @@ export function MessageList({
   const restore = useRef<{ height: number; top: number } | null>(null);
   const initialScrollDone = useRef(false);
   const focusAttempts = useRef(0);
+  /** Deep-linked message already brought into view: later updates (new messages, streaming) must not scroll back to it. */
+  const focusedFor = useRef<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
+  const channels = useChannels();
+  const channelLastAt = channels.data?.find((c) => c.id === channelId)?.lastMessageAt ?? null;
 
   // Reset per channel.
   useEffect(() => {
     nearBottom.current = true;
     initialScrollDone.current = false;
     focusAttempts.current = 0;
+    focusedFor.current = null;
   }, [channelId]);
 
   const firstId = messages[0]?.id;
@@ -100,11 +105,12 @@ export function MessageList({
     return () => io.disconnect();
   }, [query, channelId]);
 
-  // Deep link to a message: load older pages until it is found (bounded), then scroll to it.
+  // Deep link to a message: load older pages until it is found (bounded), then scroll to it once.
   useEffect(() => {
-    if (!focusMessageId || query.isPending) return;
+    if (!focusMessageId || query.isPending || focusedFor.current === focusMessageId) return;
     const node = document.getElementById(`msg-${focusMessageId}`);
     if (node) {
+      focusedFor.current = focusMessageId;
       node.scrollIntoView({ block: 'center' });
       setHighlight(focusMessageId);
       nearBottom.current = false;
@@ -116,10 +122,18 @@ export function MessageList({
     }
   }, [focusMessageId, messages, query]);
 
-  // Read marks.
+  // Read marks: the whole channel while it is on screen, thread replies included (they bump lastMessageAt too),
+  // and again when the tab becomes visible.
+  const lastAt = [last?.createdAt, channelLastAt].reduce<string | null>((a, b) => (b && (!a || b > a) ? b : a), null);
   useEffect(() => {
-    if (last && document.visibilityState === 'visible') markRead(channelId, last.createdAt);
-  }, [channelId, last]);
+    if (!lastAt) return;
+    const mark = () => {
+      if (document.visibilityState === 'visible') markRead(channelId, lastAt);
+    };
+    mark();
+    document.addEventListener('visibilitychange', mark);
+    return () => document.removeEventListener('visibilitychange', mark);
+  }, [channelId, lastAt]);
 
   if (query.isPending) return <LoadingBlock label="Chargement des messages…" />;
   if (query.isError) return <ErrorBlock error={query.error} onRetry={() => void query.refetch()} />;

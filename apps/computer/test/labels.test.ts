@@ -1,5 +1,20 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { describeElement, describeElements, MAX_ELEMENTS, nameOf, pageText, refSelector, roleOf, type RawElement } from '../src/browser/labels';
+import {
+  describeElement,
+  describeElements,
+  isPin,
+  MAX_ELEMENTS,
+  nameOf,
+  pageText,
+  PIN_ATTR,
+  PIN_RE,
+  pinSelector,
+  readPageScript,
+  refSelector,
+  roleOf,
+  type RawElement,
+} from '../src/browser/labels';
 
 const raw = (over: Partial<RawElement>): RawElement => ({
   ref: 'e1',
@@ -66,6 +81,25 @@ describe('refSelector / pageText', () => {
     expect(refSelector('e12')).toBe('[data-ant-ref="e12"]');
     expect(() => refSelector('e1"] , body [x="')).toThrow(/invalide/);
     expect(() => refSelector('12')).toThrow();
+  });
+  it('builds pin selectors from UUIDs only; read never clears pins', () => {
+    const pin = '0f8b5c1e-2a3d-4e5f-8a9b-0c1d2e3f4a5b';
+    expect(pinSelector(pin)).toBe(`[data-ant-pin="${pin}"]`);
+    expect(() => pinSelector('e12')).toThrow(/invalide/);
+    expect(() => pinSelector(`${pin}"] , body [x="`)).toThrow(/invalide/);
+    expect(() => pinSelector('')).toThrow(/invalide/);
+    expect(readPageScript()).not.toContain(PIN_ATTR);
+  });
+  it('recognises the pins inspect issues, also from the pattern source sent to the page', () => {
+    const inPage = new RegExp(PIN_RE.source);
+    for (const pin of [randomUUID(), randomUUID()]) {
+      expect(isPin(pin)).toBe(true);
+      expect(inPage.test(pin)).toBe(true);
+    }
+    for (const planted of ['x', 'e2', '', '0F8B5C1E-2A3D-4E5F-8A9B-0C1D2E3F4A5B', `${randomUUID()} `, 'a'.repeat(100_000)]) {
+      expect(isPin(planted)).toBe(false);
+      expect(inPage.test(planted)).toBe(false);
+    }
   });
   it('trims and caps page text at 50 000 chars', () => {
     expect(pageText('  a  \n\n\n\nb ')).toBe('a\n\nb');

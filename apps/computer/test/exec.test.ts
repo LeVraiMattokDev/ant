@@ -1,6 +1,10 @@
+import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { ExecResponse } from '@ant/shared';
 import type { Config } from '../src/config';
 import { OutputCollector, runCommand } from '../src/exec';
 import { PathError } from '../src/paths';
@@ -99,10 +103,50 @@ describe('runCommand', () => {
     expect(Buffer.byteLength(r.stdout)).toBeLessThan(1200);
   });
 
+  it('background children that keep writing to the inherited pipes survive the answer', async () => {
+    const marker = path.join(cfg.workspaceRoot, 'background-alive');
+    // The answer comes PIPE_DRAIN_MS (1 s) after bash exits; the child writes (stdout, then stderr) after that.
+    const r = await runCommand(cfg, { command: `(sleep 2.5; echo encore; echo erreur >&2; touch ${marker}) & echo started` });
+    expect(r.stdout).toBe('started\n');
+    expect(r.durationMs).toBeLessThan(2_400);
+    await expect.poll(() => existsSync(marker), { timeout: 6_000, interval: 100 }).toBe(true);
+  }, 15_000);
+
   it('does not wait for background children holding the pipes', async () => {
     const r = await runCommand(cfg, { command: 'sleep 20 & echo started' });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toBe('started\n');
     expect(r.durationMs).toBeLessThan(5_000);
   });
+
+  it('does not keep the captured output alive while background children hold the pipes', async () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const collect = async (): Promise<{ buffers: number; heap: number }> => {
+      for (let i = 0; i < 3; i++) {
+        gc();
+        await new Promise((res) => setTimeout(res, 50));
+      }
+      const { arrayBuffers, heapUsed } = process.memoryUsage();
+      return { buffers: arrayBuffers, heap: heapUsed };
+    };
+    const big = { ...cfg, maxOutputBytes: 64 * 1024 * 1024 };
+    const before = await collect();
+    // `sleep 60 &` inherits stdout/stderr and keeps them open long after the answer (like `server &`).
+    let r: ExecResponse | undefined = await runCommand(big, {
+      command: 'sleep 60 & echo "$!" >&2; head -c 40000000 /dev/zero | tr "\\0" x',
+    });
+    const pid = Number(r.stderr.trim());
+    try {
+      expect(r.stdout.length).toBe(40_000_000);
+      r = undefined;
+      // Neither the 40 MB read from the pipe nor the 40 MB answer may stay referenced by the
+      // pipes that the background child still holds open.
+      const after = await collect();
+      expect(after.buffers - before.buffers).toBeLessThan(10 * 1024 * 1024);
+      expect(after.heap - before.heap).toBeLessThan(10 * 1024 * 1024);
+    } finally {
+      if (pid > 0) process.kill(pid, 'SIGKILL');
+    }
+  }, 20_000);
 });

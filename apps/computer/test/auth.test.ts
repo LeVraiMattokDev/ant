@@ -36,10 +36,11 @@ describe('loadConfig', () => {
       workspaceRoot: '/workspace',
       browserProfileDir: '/home/agent/.ant-browser',
       display: ':99',
-      vncPort: 5900,
+      vncSocket: '/tmp/.ant-vnc/vnc.sock',
       headless: false,
       maxOutputBytes: 100_000,
     });
+    expect(loadConfig({ COMPUTER_RPC_TOKEN: TOKEN, VNC_SOCKET: ' /run/ant/vnc.sock ' }).vncSocket).toBe('/run/ant/vnc.sock');
   });
 });
 

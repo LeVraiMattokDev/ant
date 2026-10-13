@@ -113,13 +113,40 @@ export const BROWSER_ACTIONS = ['goto', 'read', 'screenshot', 'scroll', 'back', 
 export type BrowserAction = (typeof BROWSER_ACTIONS)[number];
 
 /**
- * On a sensitive site, actions that can commit something (a click, pressing Enter) need approval.
- * Typing into a field or selecting an option commits nothing by itself, so it stays free;
- * the click on « Envoyer / Payer / Publier » is what gets validated.
+ * Keys that only move the focus or scroll. Every other key can commit something on a sensitive site:
+ * Enter in any spelling (NumpadEnter, "\r", "\n"), Space on a focused button, chords such as
+ * Control+Enter (send / post shortcut on Gmail, X, Proton…) and single-letter site shortcuts.
+ */
+const NAVIGATION_KEYS = new Set([
+  'tab',
+  'shift+tab',
+  'arrowup',
+  'arrowdown',
+  'arrowleft',
+  'arrowright',
+  'pageup',
+  'pagedown',
+  'home',
+  'end',
+  'escape',
+]);
+
+/** True when pressing `key` cannot submit, send or activate anything. */
+export function isNavigationKey(key: string | undefined): boolean {
+  if (!key) return false;
+  // Exact match after dropping spaces around "+" only: " " (Space) must not normalise into a navigation key.
+  return NAVIGATION_KEYS.has(key.replace(/\s*\+\s*/g, '+').trim().toLowerCase());
+}
+
+/**
+ * On a sensitive site, actions that can commit something need approval: a click, and any key press
+ * other than pure navigation (allowlist, so new shortcuts cannot slip through).
+ * Typing into a field or selecting an option commits nothing by itself (it fills the field without
+ * key events), so it stays free; the click or key that sends is what gets validated.
  */
 export function browserActionNeedsApproval(action: BrowserAction, url: string, domains: readonly string[], key?: string): boolean {
   if (!isSensitiveUrl(url, domains)) return false;
   if (action === 'click') return true;
-  if (action === 'press') return (key ?? '').toLowerCase() === 'enter';
+  if (action === 'press') return !isNavigationKey(key);
   return false;
 }

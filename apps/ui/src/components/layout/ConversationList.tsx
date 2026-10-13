@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Link, NavLink, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Bot, CalendarClock, Plus, Search, Settings2, Users, X } from 'lucide-react';
+import { Bot, CalendarClock, MessagesSquare, Plus, Search, Settings2, Users, X } from 'lucide-react';
 import type { BotDTO, ChannelDTO, RoutineDTO } from '@ant/shared';
 import { patch } from '../../lib/api';
 import { formatRelative } from '../../lib/format';
@@ -61,7 +61,8 @@ function BotRow({
       <NavLink
         to={`/c/${channel?.id ?? bot.dmChannelId}`}
         className={({ isActive }) =>
-          cx('flex items-center gap-3 rounded-[14px] px-2.5 py-2.5 transition-colors', isActive ? 'bg-active' : 'hover:bg-hover')
+          // `group`: on the selected row (aria-current, bg-active), small grey text is raised one step to keep 4.5:1.
+          cx('group flex items-center gap-3 rounded-[14px] px-2.5 py-2.5 transition-colors', isActive ? 'bg-active' : 'hover:bg-hover')
         }
       >
         <span className={cx('relative', bot.paused && 'opacity-55')}>
@@ -74,12 +75,15 @@ function BotRow({
               <span className="shrink-0 rounded-[6px] bg-warning-soft px-1.5 text-[11px] leading-[18px] font-medium text-warning">En pause</span>
             ) : (
               bot.role && (
-                <span className="min-w-0 truncate rounded-[6px] bg-active px-1.5 text-[11.5px] leading-[18px] text-muted" title={bot.role}>
+                <span
+                  className="min-w-0 truncate rounded-[6px] bg-active px-1.5 text-[11.5px] leading-[18px] text-muted group-aria-[current=page]:text-fg"
+                  title={bot.role}
+                >
                   {bot.role}
                 </span>
               )
             )}
-            <span className={cx('ml-auto shrink-0 pl-1 text-[11.5px]', unread ? 'font-medium text-accent-text' : 'text-subtle')}>{time}</span>
+            <span className={cx('ml-auto shrink-0 pl-1 text-[11.5px]', unread ? 'font-medium text-accent-text' : 'text-subtle group-aria-[current=page]:text-muted')}>{time}</span>
           </span>
           <span className="mt-0.5 flex items-center gap-2">
             {live ? (
@@ -144,7 +148,7 @@ function AgentsTab({ query }: { query: string }) {
                 <span className="flex size-11 items-center justify-center rounded-full border border-dashed border-line-strong">
                   <Users className="size-[18px]" />
                 </span>
-                <span className="text-[12.5px] leading-tight font-medium">{groups.length ? 'Équipe' : 'Créer une équipe'}</span>
+                <span className="text-[12.5px] leading-tight font-medium">{groups.length ? 'Nouvelle équipe' : 'Créer une équipe'}</span>
               </button>
             </li>
           )}
@@ -153,7 +157,7 @@ function AgentsTab({ query }: { query: string }) {
 
       <div className="flex items-center justify-between px-3.5 pt-1 pb-1">
         <span className="text-[12px] font-medium text-subtle">
-          Agents{bots && bots.length > 0 ? ` · ${bots.length}` : ''}
+          Bots{bots && bots.length > 0 ? ` · ${bots.length}` : ''}
         </span>
         <span className="flex items-center gap-0.5">
           <Link to="/bots" className="btn btn-ghost btn-sm btn-icon" aria-label="Gérer les bots" title="Gérer les bots">
@@ -168,7 +172,7 @@ function AgentsTab({ query }: { query: string }) {
       {list.length === 0 ? (
         query ? (
           <p className="px-4 py-6 text-center text-[13px] text-subtle">
-            Aucun agent ne correspond. <kbd className="kbd">Entrée</kbd> pour chercher dans les messages.
+            Aucun bot ne correspond. <kbd className="kbd">Entrée</kbd> pour chercher dans les messages.
           </p>
         ) : (
           <div className="mx-2 rounded-[14px] border border-dashed border-line-strong px-4 py-6 text-center">
@@ -180,7 +184,7 @@ function AgentsTab({ query }: { query: string }) {
           </div>
         )
       ) : (
-        <ul aria-label="Agents" className="space-y-0.5 px-2 pb-3">
+        <ul aria-label="Bots" className="space-y-0.5 px-2 pb-3">
           {list.map((b) => {
             const channel = dmByBot.get(b.id);
             const channelId = channel?.id ?? b.dmChannelId;
@@ -201,7 +205,8 @@ function AgentsTab({ query }: { query: string }) {
   );
 }
 
-const isProposal = (r: RoutineDTO) => !r.enabled && !r.lastRunAt;
+/** Same rule as the Routines page: flagged by the server, or (older server) disabled and never run. */
+const isProposal = (r: RoutineDTO) => !r.enabled && (r.proposed ?? !r.lastRunAt);
 
 function RoutineItem({ routine, bot }: { routine: RoutineDTO; bot: BotDTO | undefined }) {
   const qc = useQueryClient();
@@ -209,7 +214,8 @@ function RoutineItem({ routine, bot }: { routine: RoutineDTO; bot: BotDTO | unde
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => patch<RoutineDTO>(`/api/routines/${routine.id}`, { enabled }),
     onMutate: (enabled) => {
-      qc.setQueryData<RoutineDTO[]>(qk.routines, (d) => d?.map((x) => (x.id === routine.id ? { ...x, enabled } : x)));
+      // Enabling accepts a proposal: it is no longer one, even if disabled again later.
+      qc.setQueryData<RoutineDTO[]>(qk.routines, (d) => d?.map((x) => (x.id === routine.id ? { ...x, enabled, ...(enabled ? { proposed: false } : {}) } : x)));
     },
     onSuccess: (r) => qc.setQueryData<RoutineDTO[]>(qk.routines, (d) => d?.map((x) => (x.id === r.id ? r : x))),
     onError: (err) => {
@@ -289,7 +295,7 @@ function RoutinesTab({ query }: { query: string }) {
   );
 }
 
-/** Search + "Agents | Routines": the desktop sidebar panel, and the mobile home screen. */
+/** Search + "Conversations | Routines": the desktop sidebar panel, and the mobile home screen. */
 export function ConversationList({ variant }: { variant: 'sidebar' | 'page' }) {
   const [query, setQuery] = useState('');
   const [tab, setTab] = useStoredState<ListTab>('ant-list-tab', 'agents', LIST_TABS);
@@ -366,8 +372,8 @@ export function ConversationList({ variant }: { variant: 'sidebar' | 'page' }) {
               id: 'agents',
               label: (
                 <>
-                  <Bot className="size-3.5" />
-                  Agents
+                  <MessagesSquare className="size-3.5" />
+                  Conversations
                 </>
               ),
             },

@@ -21,7 +21,6 @@ export interface WsDeps {
   cfg: Config;
   /** node-pty spawn (injectable for tests). Loaded lazily: it is a native module. */
   spawnPty?: SpawnPty;
-  vncHost?: string;
 }
 
 /** Above this much unsent data to the browser, stop reading from the VNC server. */
@@ -44,31 +43,33 @@ function toBuffer(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
-/** websockify-like bridge: WebSocket binary frames <-> TCP 127.0.0.1:VNC_PORT (RFB). */
-export function bridgeVnc(ws: WebSocket, host: string, port: number): void {
-  const tcp: Socket = connect({ host, port });
+/**
+ * websockify-like bridge: WebSocket binary frames <-> x11vnc's unix socket (RFB). x11vnc has no
+ * TCP port on purpose: web pages opened in Chromium could reach a loopback one (see entrypoint.sh).
+ */
+export function bridgeVnc(ws: WebSocket, socketPath: string): void {
+  const vnc: Socket = connect({ path: socketPath });
   let closed = false;
   const closeBoth = (code: number, reason: string): void => {
     if (closed) return;
     closed = true;
-    tcp.destroy();
+    vnc.destroy();
     if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(code, reason);
   };
 
-  tcp.setNoDelay(true);
-  tcp.on('data', (chunk: Buffer) => {
+  vnc.on('data', (chunk: Buffer) => {
     if (ws.readyState !== ws.OPEN) return;
     ws.send(chunk, { binary: true }, () => {
-      if (tcp.isPaused() && ws.bufferedAmount < WS_HIGH_WATER / 2) tcp.resume();
+      if (vnc.isPaused() && ws.bufferedAmount < WS_HIGH_WATER / 2) vnc.resume();
     });
-    if (ws.bufferedAmount > WS_HIGH_WATER) tcp.pause();
+    if (ws.bufferedAmount > WS_HIGH_WATER) vnc.pause();
   });
-  tcp.on('end', () => closeBoth(1000, 'VNC fermé'));
-  tcp.on('close', () => closeBoth(1000, 'VNC fermé'));
-  tcp.on('error', (err) => closeBoth(1011, `VNC injoignable : ${err.message}`.slice(0, 120)));
+  vnc.on('end', () => closeBoth(1000, 'VNC fermé'));
+  vnc.on('close', () => closeBoth(1000, 'VNC fermé'));
+  vnc.on('error', (err) => closeBoth(1011, `VNC injoignable : ${err.message}`.slice(0, 120)));
 
   ws.on('message', (data) => {
-    if (!closed) tcp.write(toBuffer(data));
+    if (!closed) vnc.write(toBuffer(data));
   });
   ws.on('close', () => closeBoth(1000, ''));
   ws.on('error', () => closeBoth(1011, ''));
@@ -179,7 +180,7 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      if (pathname === '/vnc') bridgeVnc(ws, deps.vncHost ?? '127.0.0.1', deps.cfg.vncPort);
+      if (pathname === '/vnc') bridgeVnc(ws, deps.cfg.vncSocket);
       else void bridgeTerminal(ws, deps);
     });
   });

@@ -56,7 +56,7 @@ export function ApprovalsPage() {
         <div className="max-w-3xl">
           {query.isPending ? (
             <LoadingBlock />
-          ) : query.isError ? (
+          ) : query.isError && !query.data ? (
             <ErrorBlock error={query.error} onRetry={() => void query.refetch()} />
           ) : list.length === 0 ? (
             <EmptyState title={tab === 'pending' ? 'Rien à valider' : 'Aucune validation passée'}>

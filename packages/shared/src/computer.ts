@@ -70,6 +70,11 @@ export interface BrowserRequest {
   ref?: string;
   /** CSS selector, alternative to `ref`. */
   selector?: string;
+  /**
+   * Pin returned by `inspect` (approval cards): targets exactly the node the owner saw, survives
+   * later `read`s (which renumber refs). Takes precedence over ref/selector; must match one node.
+   */
+  pin?: string;
   /** Text to type (type) or option value/label (select). */
   text?: string;
   /** Key for `press` (e.g. "Enter"). */
@@ -102,6 +107,8 @@ export interface BrowserTargetInfo {
   title: string;
   /** Accessible name / text of the element targeted by ref/selector, for approval cards. */
   elementLabel: string | null;
+  /** Pin of that exact element (see `BrowserRequest.pin`), when it was found. */
+  pin?: string;
 }
 
 export interface ComputerHealth {

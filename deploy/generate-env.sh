@@ -14,3 +14,4 @@ sed -i "s|^COMPUTER_RPC_TOKEN=.*|COMPUTER_RPC_TOKEN=$(rand 48 48)|" .env
 sed -i "s|^SETUP_TOKEN=.*|SETUP_TOKEN=$(rand 24 24)|" .env
 chmod 600 .env
 echo ".env créé (droits 600). Complète PUBLIC_ORIGIN, les identifiants Claude et les clés VAPID (voir README)."
+echo "Garde une copie de .env hors de la machine (au minimum ENCRYPTION_KEY) : elle est nécessaire pour restaurer une sauvegarde."

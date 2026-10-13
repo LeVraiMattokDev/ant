@@ -10,6 +10,7 @@ import { LoginPage } from '../src/routes/Login';
 import { Snippet } from '../src/routes/Search';
 import { UsageChart } from '../src/components/quota/UsageChart';
 import { qk } from '../src/lib/queries';
+import { SEARCH_MARK_END, SEARCH_MARK_START } from '@ant/shared';
 import { approval, bot, msg } from './fixtures';
 
 type Routes = Record<string, unknown>;
@@ -158,18 +159,21 @@ describe('LoginPage', () => {
 });
 
 describe('small renderers', () => {
-  it('highlights search matches with <mark>', () => {
-    const { container } = render(<Snippet text="le «devis» final" />);
+  it('highlights search matches with <mark> and keeps French guillemets as text', () => {
+    const { container } = render(<Snippet text={`le «${SEARCH_MARK_START}devis${SEARCH_MARK_END}» final`} />);
     expect(container.querySelector('mark')?.textContent).toBe('devis');
+    expect(container.textContent).toBe('le «devis» final');
   });
 
-  it('draws one hit target per day in the usage chart', () => {
+  it('draws one pointer hit target per day in the usage chart, without keyboard stops', () => {
     const data = [
       { day: '2026-10-11', subscription: 1, api: 0.5 },
       { day: '2026-10-12', subscription: 0, api: 2 },
     ];
-    render(<UsageChart data={data} metric="cost" />);
-    expect(screen.getAllByLabelText(/abonnement .* crédits API/)).toHaveLength(2);
+    const { container } = render(<UsageChart data={data} metric="cost" />);
+    expect(container.querySelectorAll('rect[data-day]')).toHaveLength(2);
+    // The figures are in the day-by-day table: the bars are not 7 to 90 extra tab stops.
+    expect(container.querySelectorAll('[tabindex]')).toHaveLength(0);
     expect(screen.getByRole('img', { name: /Consommation quotidienne/ })).toBeTruthy();
   });
 });

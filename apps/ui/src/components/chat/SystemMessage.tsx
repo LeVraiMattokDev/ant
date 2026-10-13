@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { AlertTriangle, ArrowRightLeft, CalendarClock, GitBranch, Info, Repeat, Wrench, ShieldCheck } from 'lucide-react';
 import { EFFORT_LABELS, MODEL_LABELS, isEffortLevel, type BotDTO, type MessageDTO } from '@ant/shared';
 import { formatFull, formatShort } from '../../lib/format';
-import { useAllApprovals } from '../../lib/queries';
+import { useAllApprovals, useApproval } from '../../lib/queries';
 import { Markdown } from '../Markdown';
 import { ApprovalCard } from '../approvals/ApprovalCard';
 import { BotAvatar } from '../BotAvatar';
@@ -70,9 +70,14 @@ function BotName({ bots, id }: { bots: Map<string, BotDTO>; id: string | null | 
 }
 
 function InlineApproval({ approvalId, bots }: { approvalId: string; bots: Map<string, BotDTO> }) {
-  const { data, isPending } = useAllApprovals();
-  const approval = data?.find((a) => a.id === approvalId);
-  if (isPending) return <div className="mt-2 text-[12.5px] text-subtle">Chargement de la validation…</div>;
+  const list = useAllApprovals();
+  const fromList = list.data?.find((a) => a.id === approvalId);
+  // The list only holds the most recent approvals: an older one is fetched on its own.
+  const single = useApproval(approvalId, !!list.data && !fromList);
+  const approval = fromList ?? single.data;
+  if (list.isPending || (!approval && single.isPending && single.fetchStatus !== 'idle')) {
+    return <div className="mt-2 text-[12.5px] text-subtle">Chargement de la validation…</div>;
+  }
   if (!approval) return <div className="mt-2 text-[12.5px] text-subtle">Validation introuvable (peut-être supprimée).</div>;
   return (
     <div className="mt-2">
@@ -143,13 +148,24 @@ export function SystemMessage({ message, bots }: { message: MessageDTO; bots: Ma
           {body}
         </Row>
       );
-    case 'approval':
+    case 'approval': {
+      // Only the request (posted by the bot's run) carries runId/botId. Outcome notices (refused, executed, failed,
+      // expired) reference the same approval: they show their text only, the card is already under the request.
+      const isRequest = !!meta.runId || !!message.botId;
+      if (!isRequest) {
+        return (
+          <Row icon={<ShieldCheck className="size-4" />} time={createdAt} title="Validation">
+            {body}
+          </Row>
+        );
+      }
       return (
         <Row icon={<ShieldCheck className="size-4" />} tone="plain" wide time={createdAt} title={`Validation demandée${author ? ` par ${author.name}` : ''}`}>
           {body}
           {meta.approvalId && <InlineApproval approvalId={meta.approvalId} bots={bots} />}
         </Row>
       );
+    }
     case 'routine':
       return (
         <Row icon={<CalendarClock className="size-4" />} time={createdAt} title="Routine">

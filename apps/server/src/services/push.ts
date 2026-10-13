@@ -21,6 +21,8 @@ export interface PushPayload {
   approvalId?: string;
 }
 
+const PUSH_TIMEOUT_MS = 15_000;
+
 export class PushSender {
   readonly enabled: boolean;
 
@@ -39,6 +41,8 @@ export class PushSender {
           await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(payload), {
             TTL: 24 * 3600,
             urgency: payload.approvalId ? 'high' : 'normal',
+            // A push service that stops answering must not hold up the scheduler or a run.
+            timeout: PUSH_TIMEOUT_MS,
           });
           delivered++;
           await this.ctx.db.update(pushSubscriptions).set({ lastOkAt: new Date(), failures: 0 }).where(eq(pushSubscriptions.id, s.id));
@@ -66,11 +70,15 @@ export interface Notification extends PushPayload {
   urgent?: boolean;
 }
 
+/** True when quiet hours hold this notification back (no Web Push now). */
+export function pushHeldByQuietHours(settings: AppSettings, urgent: boolean, now = new Date()): boolean {
+  return isWithinRange(now, settings.timezone, settings.quietHours) && !(urgent && settings.urgentPushDuringQuietHours);
+}
+
 /** In-app toast + Web Push, respecting quiet hours. Returns true when a push was attempted. */
 export async function notifyOwner(ctx: Ctx, push: PushSender, settings: AppSettings, n: Notification, now = new Date()): Promise<boolean> {
   await publish(ctx.sql, { type: 'toast', level: n.level ?? 'info', title: n.title, body: n.body, ...(n.url ? { url: n.url } : {}) });
-  const quiet = isWithinRange(now, settings.timezone, settings.quietHours);
-  if (quiet && !(n.urgent && settings.urgentPushDuringQuietHours)) return false;
+  if (pushHeldByQuietHours(settings, Boolean(n.urgent), now)) return false;
   await push.sendToAll(n);
   return true;
 }

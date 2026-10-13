@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { EFFORT_LEVELS, type BotInput } from '@ant/shared';
+import { EFFORT_LEVELS, timeRangeSchema, type BotInput } from '@ant/shared';
 import { audit } from '../../lib/audit';
 import { enqueue } from '../../lib/jobs';
 import { archiveBot, createBot, getBot, listBots, updateBot } from '../../services/bots';
 import type { WebDeps } from '../deps';
 
-const timeRange = z.object({ start: z.string(), end: z.string() }).nullable();
+// "HH:MM" checked here: a malformed value (e.g. a cleared time field) would make the worker's scheduler throw.
+const timeRange = timeRangeSchema.nullable();
 
 const permissions = z
   .object({

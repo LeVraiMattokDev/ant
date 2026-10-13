@@ -1,7 +1,7 @@
 import { and, desc, eq, gt, lt, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { settingsPatchSchema, type AuditEntryDTO } from '@ant/shared';
+import { settingsPatchSchema, type AuditEntryDTO, type NetworkInfoDTO } from '@ant/shared';
 import { auditLog, pushSubscriptions } from '../../db/schema';
 import { audit } from '../../lib/audit';
 import { HttpError } from '../../lib/errors';
@@ -79,6 +79,18 @@ export async function systemRoutes(app: FastifyInstance, deps: WebDeps): Promise
       .type('text/csv; charset=utf-8')
       .header('content-disposition', `attachment; filename="ant-audit-${new Date().toISOString().slice(0, 10)}.csv"`)
       .send(`﻿${header}\n${lines.join('\n')}\n`);
+  });
+
+  // What this service sees of the connection: Settings shows the proxy's address so TRUST_PROXY can name it exactly.
+  app.get('/api/system/network', async (req): Promise<NetworkInfoDTO> => {
+    const forwarded = req.headers['x-forwarded-for'];
+    return {
+      peerAddress: req.socket?.remoteAddress ?? null,
+      clientIp: req.ip,
+      forwardedFor: (Array.isArray(forwarded) ? forwarded.join(', ') : forwarded) ?? null,
+      trustProxy: deps.cfg.TRUST_PROXY,
+      trustAll: deps.cfg.TRUST_PROXY.trim() === 'true',
+    };
   });
 
   // ───────────── Web Push ─────────────

@@ -20,6 +20,7 @@ import { quotaRoutes } from './routes/quota';
 import { routineRoutes } from './routes/routines';
 import { systemRoutes } from './routes/system';
 import { loadSession } from './session';
+import { SessionSockets } from './session-sockets';
 import { realtimeRoutes, type RealtimeHub } from './ws';
 
 declare module 'fastify' {
@@ -34,14 +35,23 @@ declare module 'fastify' {
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /**
- * `true` trusts any proxy (fine only when the port is reachable from NPM alone, see the Proxmox firewall);
- * an IP / CIDR list trusts only those proxies for X-Forwarded-For (recommended: NPM's IP).
+ * Which peers may set the client address through X-Forwarded-For (passed to proxy-addr by Fastify):
+ * - an IP / CIDR list, e.g. NPM's address (recommended), or the names loopback, linklocal, uniquelocal
+ *   (the default: private networks, so an Internet client cannot forge its address through NPM);
+ * - `true` trusts every hop, so the leftmost X-Forwarded-For entry wins, and any client chooses it
+ *   (NPM appends the real address on the right): per-IP throttling, sessions and the audit log become forgeable;
+ * - `false` ignores the header (every client then shares NPM's address).
  */
 export function trustProxySetting(value: string): boolean | string {
   const v = value.trim();
   if (v === 'true') return true;
   if (v === 'false' || v === '') return false;
   return v;
+}
+
+/** Postgres SQLSTATE of a failed query: drizzle wraps the driver error in `cause`. */
+function pgErrorCode(err: unknown): unknown {
+  return (err as { cause?: { code?: unknown } }).cause?.code ?? (err as { code?: unknown }).code;
 }
 
 export interface BuiltApp {
@@ -58,6 +68,18 @@ export async function buildApp(deps: WebDeps, opts: { serveUi?: boolean; rpc?: P
   });
   const origin = new URL(deps.cfg.PUBLIC_ORIGIN);
   const wsOrigin = `${origin.protocol === 'https:' ? 'wss:' : 'ws:'}//${origin.host}`;
+  if (deps.cfg.NODE_ENV === 'production') {
+    const trust = trustProxySetting(deps.cfg.TRUST_PROXY);
+    if (trust === true) {
+      app.log.warn(
+        'TRUST_PROXY=true : n’importe quel client peut choisir son adresse IP via X-Forwarded-For (limites de connexion contournables, IP falsifiées dans l’audit et les sessions). Mets l’IP de Nginx Proxy Manager (GET /api/system/network indique l’adresse vue par Ant).',
+      );
+    } else if (typeof trust === 'string' && /\b(uniquelocal|linklocal)\b/.test(trust)) {
+      app.log.info(
+        'TRUST_PROXY fait confiance aux réseaux privés : indique l’IP exacte de Nginx Proxy Manager pour que ni le réseau local ni l’ordinateur des agents ne puissent choisir leur adresse IP.',
+      );
+    }
+  }
 
   await app.register(cookie);
   await app.register(helmet, {
@@ -120,6 +142,10 @@ export async function buildApp(deps: WebDeps, opts: { serveUi?: boolean; rpc?: P
         details: err.issues,
       } satisfies ApiErrorBody);
     }
+    if (pgErrorCode(err) === '22P02') {
+      // Malformed identifier or value in the path or query (e.g. a truncated link): the client's mistake, not a crash.
+      return reply.code(400).send({ error: 'invalid_request', message: 'Identifiant ou paramètre invalide.' } satisfies ApiErrorBody);
+    }
     const status = (err as { statusCode?: number }).statusCode;
     if (status && status >= 400 && status < 500) {
       return reply.code(status).send({ error: 'request_error', message: status === 429 ? 'Trop de requêtes, ralentis un peu.' : (err as Error).message } satisfies ApiErrorBody);
@@ -136,8 +162,11 @@ export async function buildApp(deps: WebDeps, opts: { serveUi?: boolean; rpc?: P
   await approvalRoutes(app, deps);
   await quotaRoutes(app, deps);
   await systemRoutes(app, deps);
-  await computerRoutes(app, deps);
-  const hub = await realtimeRoutes(app, deps);
+  // Every session-bound WebSocket (realtime, terminal, VNC) closes when its session ends.
+  const sessionSockets = new SessionSockets(deps.ctx, deps.session);
+  app.addHook('onClose', async () => sessionSockets.stop());
+  await computerRoutes(app, deps, sessionSockets);
+  const hub = await realtimeRoutes(app, deps, sessionSockets);
 
   app.get('/healthz', { config: { public: true } }, async () => ({ ok: true }));
 

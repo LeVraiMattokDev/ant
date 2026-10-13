@@ -19,13 +19,15 @@ export function ChannelSettingsModal({ channel, open, onClose }: { channel: Chan
   const [botIds, setBotIds] = useState(channel.botIds);
   const [error, setError] = useState<string | null>(null);
 
+  // Reset when the modal opens or the channel changes, not on every new channel object: each message in the
+  // channel rebuilds it (preview, lastMessageAt) and would wipe what the owner is typing.
   useEffect(() => {
     if (!open) return;
     setName(channel.name);
     setTopic(channel.topic);
     setBotIds(channel.botIds);
     setError(null);
-  }, [open, channel]);
+  }, [open, channel.id]);
 
   const save = useMutation({
     mutationFn: (input: Partial<ChannelInput>) => patch<ChannelDTO>(`/api/channels/${channel.id}`, input),

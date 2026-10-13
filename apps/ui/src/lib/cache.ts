@@ -3,7 +3,7 @@
  * They never mutate their input and return the same reference when nothing changes,
  * so TanStack Query can skip re-renders.
  */
-import type { ApprovalDTO, ChannelDTO, MessageDTO, NudgeDTO, RunDTO } from '@ant/shared';
+import { SEARCH_MARK_END, SEARCH_MARK_START, type ApprovalDTO, type ChannelDTO, type MessageDTO, type NudgeDTO, type RunDTO } from '@ant/shared';
 
 /** Shape of TanStack's InfiniteData for the channel message list. Page 0 is the newest page; each page is oldest → newest. */
 export interface MessagePages {
@@ -68,7 +68,91 @@ export function replaceChannelMessage(data: MessagePages | undefined, msg: Messa
   return mapPages(data, (m) => (m.id === msg.id ? msg : m));
 }
 
-/** Appends streamed text to a message being generated. */
+/** The oldest message loaded (first of the oldest non-empty page), if any. */
+function oldestLoaded(data: MessagePages): MessageDTO | undefined {
+  for (let i = data.pages.length - 1; i >= 0; i--) {
+    const first = data.pages[i]?.[0];
+    if (first) return first;
+  }
+  return undefined;
+}
+
+/**
+ * Applies a full version of a top-level message (`message.updated`) to a channel list. A loaded message is replaced
+ * in place. One that is not loaded is added only when it falls inside the loaded window (not older than the oldest
+ * loaded message, or nothing loaded at all): the list holds every message of that window as of its fetch, so this
+ * one was created after it and its `message.created` was lost in the race (fetch in flight, refetch overwriting
+ * the cache). An older one, e.g. the root of an old thread getting a reply, belongs to a page not loaded yet: it is
+ * left for that page instead of landing in the newest one, out of order.
+ */
+export function applyChannelMessageUpdate(data: MessagePages | undefined, msg: MessageDTO): MessagePages | undefined {
+  if (!data || msg.threadRootId) return data;
+  if (containsMessage(data, msg.id)) return replaceChannelMessage(data, msg);
+  const oldest = oldestLoaded(data);
+  if (oldest && msg.createdAt < oldest.createdAt) return data;
+  return upsertChannelMessage(data, msg);
+}
+
+/** A streamed chunk of a reply: `delta` goes at `offset`, the length of the message text before it. */
+export interface StreamChunk {
+  offset: number;
+  delta: string;
+}
+
+/**
+ * Applies streamed chunks (sorted by offset) to a message text. A chunk already contained in the text is skipped,
+ * so a text fetched after some chunks were saved is never doubled. `gap` is true when a chunk starts beyond the
+ * end of the text: something before it never reached this cache, and the text stops there.
+ */
+export function applyStreamChunks(content: string, chunks: readonly StreamChunk[]): { content: string; gap: boolean } {
+  let out = content;
+  for (const c of chunks) {
+    if (c.offset + c.delta.length <= out.length) continue;
+    if (c.offset > out.length) return { content: out, gap: true };
+    out = out.slice(0, c.offset) + c.delta;
+  }
+  return { content: out, gap: false };
+}
+
+function withChunks(m: MessageDTO, chunks: readonly StreamChunk[], onGap: () => void): MessageDTO {
+  const r = applyStreamChunks(m.content, chunks);
+  if (r.gap) onGap();
+  return r.content === m.content ? m : { ...m, content: r.content };
+}
+
+/** Brings a message being generated up to date with its streamed chunks; `onGap` is called when text is missing. */
+export function applyChunksToPages(
+  data: MessagePages | undefined,
+  messageId: string,
+  chunks: readonly StreamChunk[],
+  onGap: () => void,
+): MessagePages | undefined {
+  if (!data) return data;
+  return mapPages(data, (m) => (m.id === messageId ? withChunks(m, chunks, onGap) : m));
+}
+
+export function applyChunksToThread(
+  data: ThreadData | undefined,
+  messageId: string,
+  chunks: readonly StreamChunk[],
+  onGap: () => void,
+): ThreadData | undefined {
+  if (!data) return data;
+  if (data.root.id === messageId) {
+    const root = withChunks(data.root, chunks, onGap);
+    return root === data.root ? data : { ...data, root };
+  }
+  const idx = data.replies.findIndex((r) => r.id === messageId);
+  if (idx < 0) return data;
+  const cur = data.replies[idx]!;
+  const next = withChunks(cur, chunks, onGap);
+  if (next === cur) return data;
+  const replies = data.replies.slice();
+  replies[idx] = next;
+  return { ...data, replies };
+}
+
+/** Appends streamed text to a message being generated (events without an offset). */
 export function appendDeltaToPages(data: MessagePages | undefined, messageId: string, delta: string): MessagePages | undefined {
   if (!data) return data;
   return mapPages(data, (m) => (m.id === messageId ? { ...m, content: m.content + delta } : m));
@@ -192,10 +276,16 @@ export interface SnippetPart {
   match: boolean;
 }
 
-/** Splits a search snippet where matches are wrapped in « » (Postgres ts_headline StartSel/StopSel). */
+// The marks are control characters, never special in a regular expression.
+const SNIPPET_SOURCE = `${SEARCH_MARK_START}([^${SEARCH_MARK_END}]*)${SEARCH_MARK_END}`;
+
+/**
+ * Splits a search snippet where matches are wrapped in SEARCH_MARK_START … SEARCH_MARK_END
+ * (Postgres ts_headline StartSel/StopSel). Control characters, so French « guillemets » stay plain text.
+ */
 export function parseSnippet(snippet: string): SnippetPart[] {
   const parts: SnippetPart[] = [];
-  const re = /«([^»]*)»/g;
+  const re = new RegExp(SNIPPET_SOURCE, 'g');
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(snippet)) !== null) {

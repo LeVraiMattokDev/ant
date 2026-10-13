@@ -7,6 +7,7 @@ import { HttpError } from '../../lib/errors';
 import { RPC_CHANNEL } from '../../lib/events';
 import { enqueue } from '../../lib/jobs';
 import { getSettings } from '../../lib/settings';
+import { assertActiveChannel } from '../../services/channels';
 import type { Ctx } from '../../services/context';
 import { createRoutine, deleteRoutine, listRoutines, nextRuns, updateRoutine, validateCron } from '../../services/routines';
 import { requestRun } from '../../services/runs';
@@ -82,6 +83,8 @@ export async function routineRoutes(app: FastifyInstance, deps: WebDeps, parser?
     return { description: describeCron(cron), nextRuns: nextRuns(cron, tz).map((d) => d.toISOString()) };
   });
 
+  // Bot and channel checks (unknown or archived → 400 unknown_bot / invalid_channel) belong to createRoutine and
+  // updateRoutine, which know the real target: `channelId: null` or a new bot without a channel means a bot's DM.
   app.post('/api/routines', async (req) => {
     const settings = await getSettings(ctx.db);
     const routine = await createRoutine(ctx, routineInput.parse(req.body) as RoutineInput, settings.timezone);
@@ -104,6 +107,7 @@ export async function routineRoutes(app: FastifyInstance, deps: WebDeps, parser?
   app.post<{ Params: { id: string } }>('/api/routines/:id/run', async (req) => {
     const routine = await ctx.db.query.routines.findFirst({ where: eq(routines.id, req.params.id) });
     if (!routine) throw new HttpError(404, 'not_found', 'Routine introuvable.');
+    if (routine.channelId) await assertActiveChannel(ctx, routine.channelId);
     const run = await requestRun(ctx, {
       botId: routine.botId,
       channelId: routine.channelId,

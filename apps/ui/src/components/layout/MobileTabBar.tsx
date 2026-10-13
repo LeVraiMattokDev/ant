@@ -1,6 +1,23 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import type { ComponentType } from 'react';
-import { Bot, Brain, CalendarClock, ClipboardCheck, Gauge, Home, LogOut, Monitor, Moon, MoreHorizontal, ScrollText, Search, Settings, Sun, Users } from 'lucide-react';
+import {
+  Bot,
+  Brain,
+  CalendarClock,
+  ClipboardCheck,
+  Gauge,
+  Home,
+  LogOut,
+  MessagesSquare,
+  Monitor,
+  Moon,
+  MoreHorizontal,
+  ScrollText,
+  Search,
+  Settings,
+  Sun,
+  Users,
+} from 'lucide-react';
 import { usePendingApprovals } from '../../lib/queries';
 import { useTheme } from '../../lib/theme';
 import { MenuItem, MenuSeparator, Popover } from '../Popover';
@@ -39,8 +56,8 @@ export function MobileTabBar() {
       className="safe-bottom fixed inset-x-0 bottom-0 z-30 flex h-[calc(60px+env(safe-area-inset-bottom))] border-t border-line bg-surface/95 backdrop-blur md:hidden"
     >
       <NavLink to="/" end className={() => tabClass(pathname === '/')} aria-current={pathname === '/' ? 'page' : undefined}>
-        <Bot className="size-[22px]" />
-        Agents
+        <MessagesSquare className="size-[22px]" />
+        Conversations
       </NavLink>
       <NavLink to="/approvals" className={({ isActive }) => tabClass(isActive)}>
         <span className="relative">
@@ -90,7 +107,7 @@ export function MobileTabBar() {
                 openNewChannel();
               }}
             >
-              Nouveau canal de groupe
+              Nouvelle équipe
             </MenuItem>
             <MenuSeparator />
             <MenuItem

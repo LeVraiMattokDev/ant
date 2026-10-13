@@ -1,7 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
 import WebSocket from 'ws';
-import { authSessions } from '../db/schema';
 import type { ServerEvent } from '@ant/shared';
 import { runToDTO } from '../lib/dto';
 import { subscribe, type WireEvent } from '../lib/events';
@@ -9,17 +7,19 @@ import { logger } from '../lib/logger';
 import { getMessageDTO } from '../services/messages';
 import { getRun } from '../services/runs';
 import type { WebDeps } from './deps';
+import type { SessionSockets } from './session-sockets';
 
 export interface RealtimeHub {
   broadcast(event: ServerEvent): void;
   clients(): number;
+  /** Closes the sockets (realtime, terminal, VNC) whose session was revoked, expired or went idle. */
+  revalidateSessions(): Promise<number>;
   close(): Promise<void>;
 }
 
 /** Fans Postgres NOTIFY events out to the connected browsers. */
-export async function realtimeRoutes(app: FastifyInstance, deps: WebDeps): Promise<RealtimeHub> {
+export async function realtimeRoutes(app: FastifyInstance, deps: WebDeps, sessionSockets: SessionSockets): Promise<RealtimeHub> {
   const sockets = new Set<WebSocket>();
-  const sessionOf = new Map<WebSocket, string>();
   const origin = new URL(deps.cfg.PUBLIC_ORIGIN).origin;
 
   const broadcast = (event: ServerEvent) => {
@@ -52,39 +52,26 @@ export async function realtimeRoutes(app: FastifyInstance, deps: WebDeps): Promi
       return;
     }
     sockets.add(socket);
-    if (req.session) sessionOf.set(socket, req.session.id);
+    sessionSockets.track(socket, req.session?.id);
     socket.on('message', (raw) => {
       try {
         const msg = JSON.parse(raw.toString()) as { type?: string };
-        if (msg.type === 'ping') socket.send(JSON.stringify({ type: 'pong' }));
+        if (msg.type === 'ping' && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'pong' }));
       } catch {
         // ignore
       }
     });
-    const forget = () => {
-      sockets.delete(socket);
-      sessionOf.delete(socket);
-    };
+    const forget = () => sockets.delete(socket);
     socket.on('close', forget);
     socket.on('error', forget);
   });
 
-  // Close sockets whose session was revoked or expired (logout elsewhere, password change).
-  const revalidate = setInterval(() => {
-    void (async () => {
-      const now = new Date();
-      for (const [socket, id] of sessionOf) {
-        const row = await deps.ctx.db.query.authSessions.findFirst({ where: eq(authSessions.id, id) });
-        if (!row || row.revokedAt || row.expiresAt < now) socket.close(4401, 'session expirée');
-      }
-    })().catch((err) => logger.warn({ err }, 'socket revalidation failed'));
-  }, 60_000);
-
   return {
     broadcast,
     clients: () => sockets.size,
+    revalidateSessions: () => sessionSockets.revalidate(),
     close: async () => {
-      clearInterval(revalidate);
+      sessionSockets.stop();
       for (const s of sockets) s.close(1001, 'arrêt');
       await unlisten();
     },

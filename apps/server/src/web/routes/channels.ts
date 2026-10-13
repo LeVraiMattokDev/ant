@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { SEARCH_MARK_END, SEARCH_MARK_START } from '@ant/shared';
 import { audit } from '../../lib/audit';
 import { HttpError } from '../../lib/errors';
 import { archiveChannel, createGroupChannel, getChannel, listChannels, updateGroupChannel } from '../../services/channels';
@@ -12,6 +13,8 @@ const channelInput = z.object({
   topic: z.string().max(500).optional(),
   botIds: z.array(z.string().uuid()).max(50),
 });
+
+const UUID = z.string().uuid();
 
 function parseDate(value: string | undefined, field: string): Date | undefined {
   if (!value) return undefined;
@@ -39,10 +42,14 @@ export async function channelRoutes(app: FastifyInstance, deps: WebDeps): Promis
     return { ok: true };
   });
 
+  // `before`: id of the oldest message already shown (exact keyset cursor), or an ISO date (older clients).
   app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string } }>('/api/channels/:id/messages', async (req) => {
     await getChannel(ctx, req.params.id);
+    const before = req.query.before;
+    const beforeId = before && UUID.safeParse(before).success ? before : undefined;
     return listChannelMessages(ctx, req.params.id, {
-      before: parseDate(req.query.before, 'before'),
+      beforeId,
+      before: beforeId ? undefined : parseDate(before, 'before'),
       limit: req.query.limit ? Number(req.query.limit) : undefined,
     });
   });
@@ -70,6 +77,8 @@ export async function channelRoutes(app: FastifyInstance, deps: WebDeps): Promis
       botId: req.query.botId || undefined,
       from: parseDate(req.query.from, 'from'),
       to: parseDate(req.query.to, 'to'),
+      match: 'all',
+      marks: { start: SEARCH_MARK_START, end: SEARCH_MARK_END },
     }),
   );
 

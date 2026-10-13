@@ -40,13 +40,9 @@ export function NewRoutine({
   const bot = bots.find((b) => b.id === botId);
   const botChannels = channels.filter((c) => c.kind === 'group' && c.botIds.includes(botId));
 
+  // The outcome callbacks are passed to `mutate`: after `parse.reset()` (manual entry), a late answer is ignored.
   const parse = useMutation({
     mutationFn: () => post<RoutineDraftDTO>('/api/routines/parse', { text: text.trim(), botId }),
-    onSuccess: (d) => {
-      setError(null);
-      setDraft({ cron: d.cron, timezone: d.timezone, instruction: d.instruction, urgent: d.urgent, description: d.description });
-    },
-    onError: (err) => setError(errorMessage(err)),
   });
 
   const create = useMutation({
@@ -64,7 +60,20 @@ export function NewRoutine({
     e.preventDefault();
     if (!text.trim() || !botId) return;
     setDraft(null);
-    parse.mutate();
+    parse.mutate(undefined, {
+      onSuccess: (d) => {
+        setError(null);
+        setDraft({ cron: d.cron, timezone: d.timezone, instruction: d.instruction, urgent: d.urgent, description: d.description });
+      },
+      onError: (err) => setError(errorMessage(err)),
+    });
+  };
+
+  /** Without the interpretation (worker down, Claude unavailable, too slow): cron and instruction typed by hand. */
+  const manual = () => {
+    parse.reset();
+    setError(null);
+    setDraft({ cron: '', timezone: '', instruction: text.trim(), urgent: false, description: '' });
   };
 
   const confirm = () => {
@@ -124,6 +133,11 @@ export function NewRoutine({
             {parse.isPending && <Spinner className="size-4 text-accent-fg" />}
             Interpréter
           </button>
+          {!draft && (
+            <button type="button" className="btn btn-ghost" onClick={manual} disabled={!botId}>
+              Saisir l’horaire moi-même
+            </button>
+          )}
           <button type="button" className="btn btn-ghost" onClick={onDone}>
             Annuler
           </button>
@@ -143,6 +157,14 @@ export function NewRoutine({
       {error && (
         <div role="alert" className="mt-3 rounded-[8px] border border-danger/40 bg-danger-soft px-3 py-2 text-[13px] text-danger">
           {error}
+          {!draft && botId && (
+            <>
+              {' '}
+              <button type="button" className="font-medium underline underline-offset-2" onClick={manual}>
+                Saisir l’horaire moi-même
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -150,7 +172,14 @@ export function NewRoutine({
         <div className="mt-5 border-t border-line pt-4">
           <h3 className="text-[14px] font-semibold">Vérifie avant d’enregistrer</h3>
           <p className="mt-0.5 mb-3 text-[12.5px] text-muted">
-            Lecture proposée : « {draft.description} ». Ajuste l’expression ou la consigne si besoin.
+            {draft.description ? (
+              <>Lecture proposée : « {draft.description} ». Ajuste l’expression ou la consigne si besoin.</>
+            ) : (
+              <>
+                Indique l’expression cron (par exemple <span className="mono">0 8 * * 1</span> pour chaque lundi à 8h) et la consigne ; l’aperçu
+                ci-dessous vérifie l’horaire.
+              </>
+            )}
           </p>
           <RoutineEditor value={draft} onChange={(v) => setDraft({ ...draft, ...v })} />
           <div className="mt-4">

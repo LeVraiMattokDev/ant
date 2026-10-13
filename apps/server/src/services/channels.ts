@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import type { AuthorKind, ChannelDTO, ChannelInput } from '@ant/shared';
-import { bots, channelMembers, channels } from '../db/schema';
+import { bots, channelMembers, channels, routines } from '../db/schema';
 import { channelToDTO } from '../lib/dto';
 import { HttpError } from '../lib/errors';
 import { publish } from '../lib/events';
@@ -27,11 +27,14 @@ export async function channelBotIds(ctx: Ctx, channelId: string): Promise<string
 export async function listChannels(ctx: Ctx): Promise<ChannelDTO[]> {
   const rows = await ctx.db.select().from(channels).where(isNull(channels.archivedAt)).orderBy(desc(channels.lastMessageAt));
   if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.id);
+  // Same members as channelBotIds: an archived bot cannot be unticked in the UI, and saving it back would be refused.
   const members = await ctx.db
     .select({ channelId: channelMembers.channelId, botId: channelMembers.botId })
     .from(channelMembers)
-    .where(inArray(channelMembers.channelId, rows.map((r) => r.id)));
-  const ids = rows.map((r) => r.id);
+    .innerJoin(bots, eq(bots.id, channelMembers.botId))
+    .where(and(inArray(channelMembers.channelId, ids), isNull(bots.archivedAt)))
+    .orderBy(asc(bots.createdAt));
   const latest = await ctx.sql<{ channel_id: string; content: string; author_kind: AuthorKind; bot_id: string | null; created_at: Date }[]>`
     select distinct on (channel_id) channel_id, left(content, 300) as content, author_kind, bot_id, created_at
     from messages
@@ -92,6 +95,18 @@ export async function updateGroupChannel(ctx: Ctx, id: string, input: Partial<Ch
 export async function archiveChannel(ctx: Ctx, id: string): Promise<void> {
   const current = await getChannel(ctx, id);
   if (current.kind !== 'group') throw new HttpError(400, 'not_group', 'Les messages privés ne peuvent pas être supprimés (archive le bot).');
-  await ctx.db.update(channels).set({ archivedAt: new Date() }).where(eq(channels.id, id));
+  const now = new Date();
+  await ctx.db.transaction(async (tx) => {
+    await tx.update(channels).set({ archivedAt: now }).where(eq(channels.id, id));
+    // Routines posting here would keep running paid agent work whose result no one can see.
+    await tx.update(routines).set({ enabled: false, nextRunAt: null, updatedAt: now }).where(eq(routines.channelId, id));
+  });
   await publish(ctx.sql, { type: 'channel.updated', channelId: id });
+  await publish(ctx.sql, { type: 'routines.updated' });
+}
+
+/** A body field naming a channel must name an active one. */
+export async function assertActiveChannel(ctx: Ctx, channelId: string): Promise<void> {
+  const row = await ctx.db.query.channels.findFirst({ columns: { id: true }, where: and(eq(channels.id, channelId), isNull(channels.archivedAt)) });
+  if (!row) throw new HttpError(400, 'invalid_channel', 'Canal introuvable ou archivé.');
 }

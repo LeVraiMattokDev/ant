@@ -82,7 +82,8 @@ export async function performHandoff(deps: WorkerDeps, settings: AppSettings, in
     chainId: input.fromRun.chainId,
     hop: input.fromRun.hop + 1,
     prompt,
-    payload: { handoffFromBotId: input.fromBot.id },
+    // handoffFromRunId lets the runner skip @mentions of a bot this run already handed off to.
+    payload: { handoffFromBotId: input.fromBot.id, handoffFromRunId: input.fromRun.id },
   });
   if (!run) return { ok: false, reason: `${target.name} ne peut pas recevoir de tâche` };
   await ctx.db.insert(handoffs).values({ chainId: input.fromRun.chainId, fromBotId: input.fromBot.id, toBotId: target.id, runId: run.id });

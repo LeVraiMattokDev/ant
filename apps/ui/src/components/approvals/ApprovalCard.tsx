@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { APPROVAL_CATEGORY_LABELS, type ApprovalDTO, type ApprovalStatus, type BotDTO } from '@ant/shared';
 import { APPROVAL_STATUS_LABELS } from '../../lib/labels';
@@ -16,6 +16,21 @@ const STATUS_TONE: Record<ApprovalStatus, 'accent' | 'success' | 'danger' | 'neu
   failed: 'danger',
   expired: 'neutral',
 };
+
+/** Longest delay setTimeout accepts; a later deadline is reached in several steps. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** True once the instant `at` (ms) is past, re-rendering at that moment: a card can stay on screen across its deadline. */
+function usePast(at: number): boolean {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const left = at - now;
+    if (!(left > 0)) return;
+    const t = setTimeout(() => setNow(Date.now()), Math.min(left + 50, MAX_TIMER_MS));
+    return () => clearTimeout(t);
+  }, [at, now]);
+  return at <= now;
+}
 
 export function ApprovalStatusBadge({ status }: { status: ApprovalStatus }) {
   return <Badge tone={STATUS_TONE[status]}>{APPROVAL_STATUS_LABELS[status]}</Badge>;
@@ -36,7 +51,8 @@ export function ApprovalCard({
   const [comment, setComment] = useState('');
   const [pendingDecision, setPendingDecision] = useState<'approve' | 'reject' | null>(null);
   const pending = approval.status === 'pending';
-  const expired = pending && new Date(approval.expiresAt).getTime() < Date.now();
+  // The server refuses a decision past the deadline (409) even before the worker marks the approval 'expired'.
+  const expired = usePast(new Date(approval.expiresAt).getTime()) && pending;
 
   const submit = (decision: 'approve' | 'reject') => {
     setPendingDecision(decision);
@@ -52,7 +68,7 @@ export function ApprovalCard({
       aria-label={`Validation : ${approval.title}`}
       className={cx(
         'card overflow-hidden',
-        pending && 'border-accent/50',
+        pending && !expired && 'border-accent/50',
         highlighted && 'highlight-flash',
       )}
     >
@@ -129,7 +145,11 @@ export function ApprovalCard({
           </div>
         )}
 
-        {pending && (
+        {expired && (
+          <p className="text-[12.5px] text-muted">Le délai est dépassé : l’action ne sera pas faite. Le bot devra redemander.</p>
+        )}
+
+        {pending && !expired && (
           <div className="space-y-2">
             <label className="sr-only" htmlFor={`comment-${approval.id}`}>
               Commentaire pour le bot

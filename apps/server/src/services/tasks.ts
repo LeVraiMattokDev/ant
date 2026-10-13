@@ -4,6 +4,7 @@ import { tasks } from '../db/schema';
 import { taskToDTO } from '../lib/dto';
 import { HttpError } from '../lib/errors';
 import { publish } from '../lib/events';
+import { assertActiveBot } from './bots';
 import type { Ctx } from './context';
 
 const STATUSES: TaskStatus[] = ['open', 'waiting', 'done', 'dropped'];
@@ -41,6 +42,8 @@ export async function listTasks(ctx: Ctx, filter: { botId?: string; status?: Tas
 export async function createTask(ctx: Ctx, input: TaskInput): Promise<TaskDTO> {
   if (!input.title.trim()) throw new HttpError(400, 'invalid_title', 'Titre obligatoire.');
   if (input.status && !STATUSES.includes(input.status)) throw new HttpError(400, 'invalid_status', 'Statut invalide.');
+  const dueAt = parseDue(input.dueAt) ?? null;
+  await assertActiveBot(ctx, input.botId);
   const [row] = await ctx.db
     .insert(tasks)
     .values({
@@ -48,7 +51,7 @@ export async function createTask(ctx: Ctx, input: TaskInput): Promise<TaskDTO> {
       title: input.title.trim().slice(0, 300),
       details: input.details ?? '',
       status: input.status ?? 'open',
-      dueAt: parseDue(input.dueAt) ?? null,
+      dueAt,
       sourceMessageId: input.sourceMessageId ?? null,
     })
     .returning();

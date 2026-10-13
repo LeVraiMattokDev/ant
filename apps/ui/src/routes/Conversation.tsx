@@ -25,11 +25,12 @@ export function ConversationPage() {
   const closeThread = useCallback(() => navigate(`/c/${channelId}`), [navigate, channelId]);
 
   if (channels.isPending) return <LoadingBlock />;
-  if (channels.isError) return <ErrorBlock error={channels.error} onRetry={() => void channels.refetch()} />;
+  // A failed refresh keeps the last list (TanStack sets isError but keeps data): the open conversation stays on screen.
+  if (channels.isError && !channels.data) return <ErrorBlock error={channels.error} onRetry={() => void channels.refetch()} />;
   if (!channel) {
     return (
-      <EmptyState title="Canal introuvable" action={<Link to="/" className="btn">Retour aux conversations</Link>}>
-        Ce canal a peut-être été archivé.
+      <EmptyState title="Conversation introuvable" action={<Link to="/" className="btn">Retour aux conversations</Link>}>
+        Cette conversation a peut-être été archivée.
       </EmptyState>
     );
   }

@@ -10,6 +10,7 @@ import { computerStatus, getComputerState, setComputerHolder } from '../../servi
 import { createMessage } from '../../services/messages';
 import { requestRun } from '../../services/runs';
 import type { WebDeps } from '../deps';
+import type { SessionSockets } from '../session-sockets';
 import { auditToDTO } from './system';
 
 const COMPUTER_TOOLS = ['computer_exec', 'browser', 'file_write', 'file_edit'];
@@ -29,18 +30,26 @@ function originAllowed(deps: WebDeps, req: FastifyRequest): boolean {
   return !origin || origin === new URL(deps.cfg.PUBLIC_ORIGIN).origin;
 }
 
-/** Bridges a browser WebSocket to the computer service, adding the RPC token. */
-function bridge(deps: WebDeps, client: WebSocket, path: '/vnc' | '/terminal', binary: boolean): void {
+/**
+ * Bridges a browser WebSocket to the computer service, adding the RPC token. The bridge lives no longer than
+ * the session that opened it: `sessionSockets` closes it on logout, revocation, password change or expiry.
+ */
+function bridge(deps: WebDeps, sessionSockets: SessionSockets, client: WebSocket, path: '/vnc' | '/terminal', binary: boolean, sessionId: string | undefined): void {
   if (!deps.computer.configured) {
     client.close(1011, 'ordinateur non configuré');
     return;
   }
+  sessionSockets.track(client, sessionId);
+  if (client.readyState !== WebSocket.OPEN) return;
   const upstream = new WebSocket(deps.computer.wsUrl(path), { headers: { authorization: deps.computer.authHeader } });
   const pending: { data: RawData; isBinary: boolean }[] = [];
   upstream.on('open', () => {
+    if (client.readyState !== WebSocket.OPEN) return;
     for (const p of pending.splice(0)) upstream.send(p.data, { binary: p.isBinary });
   });
   client.on('message', (data, isBinary) => {
+    // `ws` still delivers messages while the client socket is CLOSING (e.g. after a revocation): drop them.
+    if (client.readyState !== WebSocket.OPEN) return;
     if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
     else if (upstream.readyState === WebSocket.CONNECTING && pending.length < 1000) pending.push({ data, isBinary });
   });
@@ -57,11 +66,12 @@ function bridge(deps: WebDeps, client: WebSocket, path: '/vnc' | '/terminal', bi
     logger.warn({ err, path }, 'computer websocket error');
     closeBoth(1011, 'ordinateur injoignable');
   });
+  // The session sockets registry closes the client side; ending the upstream kills the shell / VNC stream.
   client.on('close', () => closeBoth());
   client.on('error', () => closeBoth());
 }
 
-export async function computerRoutes(app: FastifyInstance, deps: WebDeps): Promise<void> {
+export async function computerRoutes(app: FastifyInstance, deps: WebDeps, sessionSockets: SessionSockets): Promise<void> {
   const { ctx } = deps;
 
   app.get('/api/computer/status', async () => computerStatus(ctx, await isOnline(deps)));
@@ -69,7 +79,9 @@ export async function computerRoutes(app: FastifyInstance, deps: WebDeps): Promi
   app.post('/api/computer/control', async (req) => {
     const { holder } = z.object({ holder: z.enum(['user', 'agents']) }).parse(req.body);
     const before = await getComputerState(ctx);
-    await setComputerHolder(ctx, holder);
+    // Health is checked once and shared by the live event and the response, so neither claims a dead machine is online.
+    const online = await isOnline(deps);
+    await setComputerHolder(ctx, holder, online);
     await audit(ctx.db, { actor: 'owner', event: holder === 'user' ? 'computer.takeover' : 'computer.release', ip: req.ip });
     if (holder === 'agents' && before.holder === 'user' && before.activeBotId) {
       // Wake up the bot that was using the computer, in the conversation it was working in.
@@ -98,7 +110,7 @@ export async function computerRoutes(app: FastifyInstance, deps: WebDeps): Promi
         });
       }
     }
-    return computerStatus(ctx, await isOnline(deps));
+    return computerStatus(ctx, online);
   });
 
   app.get<{ Querystring: { path?: string } }>('/api/computer/files', async (req) => {
@@ -111,12 +123,26 @@ export async function computerRoutes(app: FastifyInstance, deps: WebDeps): Promi
 
   app.get<{ Querystring: { path?: string } }>('/api/computer/files/download', async (req, reply) => {
     if (!req.query.path) throw new HttpError(400, 'missing_path', 'Chemin manquant.');
-    const res = await deps.computer.download(req.query.path);
-    if (!res.ok || !res.body) throw new HttpError(res.status === 404 ? 404 : 502, 'download_failed', 'Téléchargement impossible.');
+    let res: Response;
+    try {
+      res = await deps.computer.download(req.query.path);
+    } catch (err) {
+      throw new HttpError(502, 'download_failed', `Téléchargement impossible : ${(err as Error).message}`);
+    }
+    if (!res.ok || !res.body) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new HttpError(res.status === 404 ? 404 : 502, 'download_failed', 'Téléchargement impossible.');
+    }
     await audit(ctx.db, { actor: 'owner', event: 'computer.download', detail: { path: req.query.path }, ip: req.ip });
     reply.header('content-type', res.headers.get('content-type') ?? 'application/octet-stream');
     reply.header('content-disposition', res.headers.get('content-disposition') ?? 'attachment');
-    return reply.send(Buffer.from(await res.arrayBuffer()));
+    const length = res.headers.get('content-length');
+    if (length && /^\d+$/.test(length)) reply.header('content-length', length);
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('cache-control', 'no-store');
+    // Streamed with backpressure: the web service never holds the whole file (agents can create files of several GB).
+    // Fastify cancels the upstream body if the browser goes away.
+    return reply.send(res.body);
   });
 
   app.get<{ Querystring: { limit?: string } }>('/api/computer/activity', async (req) => {
@@ -133,12 +159,12 @@ export async function computerRoutes(app: FastifyInstance, deps: WebDeps): Promi
   app.get('/api/computer/vnc', { websocket: true }, (socket, req) => {
     if (!originAllowed(deps, req)) return socket.close(1008, 'origine refusée');
     void audit(ctx.db, { actor: 'owner', event: 'computer.view', ip: req.ip });
-    bridge(deps, socket, '/vnc', true);
+    bridge(deps, sessionSockets, socket, '/vnc', true, req.session?.id);
   });
 
   app.get('/api/computer/terminal', { websocket: true }, (socket, req) => {
     if (!originAllowed(deps, req)) return socket.close(1008, 'origine refusée');
     void audit(ctx.db, { actor: 'owner', event: 'computer.terminal', ip: req.ip });
-    bridge(deps, socket, '/terminal', false);
+    bridge(deps, sessionSockets, socket, '/terminal', false, req.session?.id);
   });
 }

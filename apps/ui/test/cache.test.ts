@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { SEARCH_MARK_END, SEARCH_MARK_START } from '@ant/shared';
 import {
   appendDeltaToPages,
   appendDeltaToThread,
   applyApprovalUpdate,
+  applyChannelMessageUpdate,
   applyRunUpdate,
+  applyStreamChunks,
   bumpReplyCount,
   flattenMessages,
   parseSnippet,
@@ -48,6 +51,30 @@ describe('channel messages', () => {
     const data = pages([msg({ id: 'b', createdAt: '2026-10-12T12:00:00.000Z' })]);
     const next = upsertChannelMessage(data, msg({ id: 'a', createdAt: '2026-10-12T11:00:00.000Z' }));
     expect(flattenMessages(next).map((m) => m.id)).toEqual(['a', 'b']);
+  });
+
+  it('applies a message update: in place when loaded, added inside the loaded window, never before it', () => {
+    const t = (min: number) => `2026-10-12T10:${String(min).padStart(2, '0')}:00.000Z`;
+    // Two pages loaded: 10:10–10:11 (older) and 10:20–10:21 (newest).
+    const data = pages([msg({ id: 'n20', createdAt: t(20) }), msg({ id: 'n21', createdAt: t(21) })], [msg({ id: 'o10', createdAt: t(10) }), msg({ id: 'o11', createdAt: t(11) })]);
+    const replaced = applyChannelMessageUpdate(data, msg({ id: 'o10', createdAt: t(10), content: 'modifié' }));
+    expect(flattenMessages(replaced).map((m) => [m.id, m.content])).toEqual([
+      ['o10', 'modifié'],
+      ['o11', ''],
+      ['n20', ''],
+      ['n21', ''],
+    ]);
+    // Created after the fetch, its message.created lost: added to the newest page.
+    expect(flattenMessages(applyChannelMessageUpdate(data, msg({ id: 'late', createdAt: t(22) }))).map((m) => m.id)).toEqual(['o10', 'o11', 'n20', 'n21', 'late']);
+    // Older than everything loaded (an old thread root): left for its own page.
+    expect(applyChannelMessageUpdate(data, msg({ id: 'old', createdAt: t(1) }))).toBe(data);
+    // An empty trailing page does not hide the oldest loaded message.
+    const withEmpty: MessagePages = { pages: [...data.pages, []], pageParams: [null, null, null] };
+    expect(applyChannelMessageUpdate(withEmpty, msg({ id: 'old', createdAt: t(1) }))).toBe(withEmpty);
+    // Nothing loaded at fetch time: every message is newer.
+    expect(flattenMessages(applyChannelMessageUpdate(pages([]), msg({ id: 'first' }))).map((m) => m.id)).toEqual(['first']);
+    expect(applyChannelMessageUpdate(data, msg({ id: 'r', threadRootId: 'n20', createdAt: t(30) }))).toBe(data);
+    expect(applyChannelMessageUpdate(undefined, msg({ id: 'x' }))).toBeUndefined();
   });
 
   it('appends streamed deltas and returns the same reference when the message is unknown', () => {
@@ -125,8 +152,11 @@ describe('nudges', () => {
 });
 
 describe('search snippets', () => {
-  it('splits « » markers into highlighted parts', () => {
-    expect(parseSnippet('Le «devis» de «Marie» est prêt')).toEqual([
+  const S = SEARCH_MARK_START;
+  const E = SEARCH_MARK_END;
+
+  it('splits the server marks into highlighted parts', () => {
+    expect(parseSnippet(`Le ${S}devis${E} de ${S}Marie${E} est prêt`)).toEqual([
       { text: 'Le ', match: false },
       { text: 'devis', match: true },
       { text: ' de ', match: false },
@@ -134,5 +164,30 @@ describe('search snippets', () => {
       { text: ' est prêt', match: false },
     ]);
     expect(parseSnippet('aucun marqueur')).toEqual([{ text: 'aucun marqueur', match: false }]);
+  });
+
+  it('leaves French « guillemets » in the text as written', () => {
+    expect(parseSnippet(`Il a dit « ${S}oui${E} » hier`)).toEqual([
+      { text: 'Il a dit « ', match: false },
+      { text: 'oui', match: true },
+      { text: ' » hier', match: false },
+    ]);
+  });
+});
+
+describe('streamed chunks', () => {
+  it('applies chunks by offset, skips those already in the text and stops at a hole', () => {
+    const chunks = [
+      { offset: 0, delta: 'Bon' },
+      { offset: 3, delta: 'jour' },
+      { offset: 7, delta: ' à tous' },
+    ];
+    expect(applyStreamChunks('', chunks)).toEqual({ content: 'Bonjour à tous', gap: false });
+    // Text fetched after the first two chunks were saved: nothing doubled.
+    expect(applyStreamChunks('Bonjour', chunks)).toEqual({ content: 'Bonjour à tous', gap: false });
+    // Text ahead of every chunk stays as is.
+    expect(applyStreamChunks('Bonjour à tous !', chunks)).toEqual({ content: 'Bonjour à tous !', gap: false });
+    // Text that misses a chunk: nothing is appended after the hole.
+    expect(applyStreamChunks('Bon', [{ offset: 7, delta: ' à tous' }])).toEqual({ content: 'Bon', gap: true });
   });
 });

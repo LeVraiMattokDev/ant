@@ -42,6 +42,8 @@ export const qk = {
   runs: (botId?: string, limit?: number) => ['runs', 'list', botId ?? null, limit ?? null] as const,
   runsList: ['runs', 'list'] as const,
   approvals: (status: 'pending' | 'all') => ['approvals', status] as const,
+  /** One approval, for those older than the list's window. Under ['approvals'], so approval.updated refreshes it. */
+  approval: (id: string) => ['approvals', 'one', id] as const,
   approvalsAll: ['approvals'] as const,
   quota: ['quota'] as const,
   usage: (days: number) => ['quota', 'usage', days] as const,
@@ -78,8 +80,19 @@ export function createQueryClient(): QueryClient {
 }
 
 // ───────────── Auth ─────────────
-export const useAuthState = () =>
-  useQuery({ queryKey: qk.authState, queryFn: () => get<AuthStateDTO>('/api/auth/state'), staleTime: 0 });
+/**
+ * The session state. A 200 answer that is not one (captive portal, proxy maintenance page, empty body) is treated
+ * as an unreachable server, never as a logged-out owner.
+ */
+export async function fetchAuthState(): Promise<AuthStateDTO> {
+  const s = await get<AuthStateDTO | null>('/api/auth/state');
+  if (typeof s !== 'object' || s === null || typeof s.authenticated !== 'boolean') {
+    throw new ApiError(0, 'network', 'Serveur injoignable. Vérifie ta connexion.');
+  }
+  return s;
+}
+
+export const useAuthState = () => useQuery({ queryKey: qk.authState, queryFn: fetchAuthState, staleTime: 0 });
 export const usePasskeys = () => useQuery({ queryKey: qk.passkeys, queryFn: () => get<PasskeyDTO[]>('/api/auth/passkeys') });
 export const useSessions = () =>
   useQuery({ queryKey: qk.sessions, queryFn: () => get<AuthSessionDTO[]>('/api/auth/sessions') });
@@ -127,9 +140,30 @@ export const usePendingApprovals = () =>
   useQuery({ queryKey: qk.approvals('pending'), queryFn: () => get<ApprovalDTO[]>('/api/approvals', { status: 'pending' }) });
 export const useAllApprovals = (enabled = true) =>
   useQuery({ queryKey: qk.approvals('all'), queryFn: () => get<ApprovalDTO[]>('/api/approvals'), enabled });
+/** GET /api/approvals only returns the most recent ones: older approvals referenced in a conversation are fetched alone. */
+export const useApproval = (id: string, enabled = true) =>
+  useQuery({ queryKey: qk.approval(id), queryFn: () => get<ApprovalDTO>(`/api/approvals/${encodeURIComponent(id)}`), enabled, retry: false });
 
 // ───────────── Quota & settings ─────────────
 export const useQuota = () => useQuery({ queryKey: qk.quota, queryFn: () => get<QuotaStatusDTO>('/api/quota') });
+
+/** True when the server reports that the worker stopped answering (false when it does not report it). */
+export function isWorkerDown(quota: Pick<QuotaStatusDTO, 'worker'> | undefined): boolean {
+  return quota?.worker ? !quota.worker.alive : false;
+}
+
+/**
+ * Whether the worker, which runs the bots, looks stopped. A stopped worker publishes no event, so the quota is
+ * polled while the server reports the worker's heartbeat.
+ */
+export function useWorkerDown(): boolean {
+  const { data } = useQuery({
+    queryKey: qk.quota,
+    queryFn: () => get<QuotaStatusDTO>('/api/quota'),
+    refetchInterval: (q) => (q.state.data?.worker ? 60_000 : false),
+  });
+  return isWorkerDown(data);
+}
 export const useUsage = (days = 30) =>
   useQuery({ queryKey: qk.usage(days), queryFn: () => get<UsageRowDTO[]>('/api/quota/usage', { days }) });
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: () => get<SettingsDTO>('/api/settings') });

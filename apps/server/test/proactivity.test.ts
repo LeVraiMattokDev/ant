@@ -175,8 +175,10 @@ describe.skipIf(!hasDb)('proactivity', () => {
     const month = localMonthKey(new Date(), 'Europe/Zurich');
     await t.ctx.db.insert(runModelUsage).values({ day, month, model: 'claude-sonnet-5-5', computeSource: 'api', costUsd: 6.6 });
     const deps = workerDeps(t.ctx, fakeQuery(async function* () {}).query);
-    await checkBudgetAlerts(deps, DEFAULT_SETTINGS);
-    await checkBudgetAlerts(deps, DEFAULT_SETTINGS);
+    // Quiet hours off: during them, non-urgent alerts wait (see sched-alerts.test.ts).
+    const settings = { ...DEFAULT_SETTINGS, quietHours: null };
+    await checkBudgetAlerts(deps, settings);
+    await checkBudgetAlerts(deps, settings);
     const rows = await t.ctx.db.select().from(budgetAlerts).where(eq(budgetAlerts.scope, 'api_day'));
     expect(rows.map((r) => r.threshold).sort((a, b) => a - b)).toEqual([50, 80]);
   });

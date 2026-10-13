@@ -101,7 +101,7 @@ function GeneralSettings({ settings }: { settings: SettingsDTO }) {
             de
             <input
               type="time"
-              className="input w-28"
+              className="input w-32"
               aria-label="Début du silence"
               value={draft.quietHours.start}
               onChange={(e) => set('quietHours', { ...draft.quietHours!, start: e.target.value })}
@@ -109,7 +109,7 @@ function GeneralSettings({ settings }: { settings: SettingsDTO }) {
             à
             <input
               type="time"
-              className="input w-28"
+              className="input w-32"
               aria-label="Fin du silence"
               value={draft.quietHours.end}
               onChange={(e) => set('quietHours', { ...draft.quietHours!, end: e.target.value })}

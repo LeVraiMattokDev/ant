@@ -199,7 +199,7 @@ describe('ConversationList', () => {
   it('lists teams and bots with role, preview and live state', () => {
     setup();
     expect(screen.getByRole('link', { name: /Kozmo/ }).getAttribute('href')).toBe('/c/g1');
-    const agents = within(screen.getByRole('list', { name: 'Agents' })).getAllByRole('link');
+    const agents = within(screen.getByRole('list', { name: 'Bots' })).getAllByRole('link');
     // Creation order, not alphabetical.
     expect(agents.map((a) => a.getAttribute('href'))).toEqual(['/c/dm1', '/c/dm2']);
     expect(agents[0]?.textContent).toContain('Responsable du développement');
@@ -213,7 +213,7 @@ describe('ConversationList', () => {
     setup();
     const input = screen.getByRole('textbox', { name: /Rechercher/ });
     fireEvent.change(input, { target: { value: 'communi' } });
-    const agents = within(screen.getByRole('list', { name: 'Agents' })).getAllByRole('link');
+    const agents = within(screen.getByRole('list', { name: 'Bots' })).getAllByRole('link');
     expect(agents).toHaveLength(1);
     expect(agents[0]?.textContent).toContain('Xena');
     fireEvent.submit(input.closest('form')!);

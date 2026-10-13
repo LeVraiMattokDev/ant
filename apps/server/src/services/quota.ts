@@ -1,4 +1,4 @@
-import { and, eq, gte, sql as dsql } from 'drizzle-orm';
+import { and, eq, gte, lte, sql as dsql } from 'drizzle-orm';
 import {
   apiRemainingUsd,
   localDateKey,
@@ -91,10 +91,9 @@ export async function markSubscriptionLimited(ctx: Ctx, until: Date): Promise<Co
   return patchComputeState(ctx, { subLimitedUntil: until, subLastStatus: 'rejected', subLastEventAt: new Date() });
 }
 
-export async function clearSubscriptionLimit(ctx: Ctx): Promise<ComputeStateRow> {
-  const state = await getComputeState(ctx);
-  const now = Date.now();
-  const patch: Partial<typeof computeState.$inferInsert> = { subLimitedUntil: null, subLastStatus: 'allowed' };
+/** Zeroes the figures of the usage windows whose reset time has passed (they describe a finished window). */
+function expiredWindowPatch(state: ComputeStateRow, now: number): Partial<typeof computeState.$inferInsert> {
+  const patch: Partial<typeof computeState.$inferInsert> = {};
   if (state.subFiveHourResetsAt && state.subFiveHourResetsAt.getTime() <= now) {
     patch.subFiveHourUtil = 0;
     patch.subFiveHourResetsAt = null;
@@ -103,7 +102,38 @@ export async function clearSubscriptionLimit(ctx: Ctx): Promise<ComputeStateRow>
     patch.subSevenDayUtil = 0;
     patch.subSevenDayResetsAt = null;
   }
-  return patchComputeState(ctx, patch);
+  return patch;
+}
+
+export async function clearSubscriptionLimit(ctx: Ctx, now = new Date()): Promise<ComputeStateRow> {
+  const state = await getComputeState(ctx);
+  return patchComputeState(ctx, { subLimitedUntil: null, subLastStatus: 'allowed', ...expiredWindowPatch(state, now.getTime()) });
+}
+
+/**
+ * Lifts the subscription limit once its end has passed. Atomic: when two scheduler passes overlap,
+ * only one gets `true` (and announces the restoration). Returns false when no limit had expired.
+ */
+export async function liftExpiredSubscriptionLimit(ctx: Ctx, now = new Date()): Promise<boolean> {
+  const state = await getComputeState(ctx);
+  const [row] = await ctx.db
+    .update(computeState)
+    .set({ subLimitedUntil: null, subLastStatus: 'allowed', ...expiredWindowPatch(state, now.getTime()), updatedAt: new Date() })
+    .where(and(eq(computeState.id, 1), lte(computeState.subLimitedUntil, now)))
+    .returning({ id: computeState.id });
+  if (!row) return false;
+  await publish(ctx.sql, { type: 'quota.updated' });
+  return true;
+}
+
+/**
+ * A usage window has reset: zero its stale figures, but keep a limit that is still running
+ * (a weekly rejection outlives the reset of the 5-hour window, and vice versa).
+ */
+export async function expireUsageWindows(ctx: Ctx, now = new Date()): Promise<ComputeStateRow> {
+  const state = await getComputeState(ctx);
+  const patch = expiredWindowPatch(state, now.getTime());
+  return Object.keys(patch).length > 0 ? patchComputeState(ctx, patch) : state;
 }
 
 /** Utilisation figures are stale once their window has reset. */

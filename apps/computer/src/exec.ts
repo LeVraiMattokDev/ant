@@ -11,7 +11,8 @@ export const MAX_TIMEOUT_SEC = 1800;
 export const KILL_GRACE_MS = 5_000;
 /**
  * Once bash has exited, how long to keep reading pipes still held open by background children
- * (`server &`) before answering anyway. The children keep running.
+ * (`server &`) before answering anyway. The children keep running: the pipes stay open and are
+ * still read, but what they write after the answer is discarded.
  */
 export const PIPE_DRAIN_MS = 1_000;
 
@@ -79,6 +80,12 @@ export class OutputCollector {
   }
 }
 
+/**
+ * Module-level on purpose: a closure created inside runCommand would keep that run's whole scope
+ * (captured output included) alive for as long as the pipe it is attached to stays open.
+ */
+const ignore = (): void => undefined;
+
 function killGroup(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pid, signal);
@@ -109,31 +116,54 @@ export async function runCommand(cfg: Config, req: ExecRequest): Promise<ExecRes
     let settled = false;
     const timers: NodeJS.Timeout[] = [];
 
+    const onStdout = (c: Buffer): void => stdout.push(c);
+    const onStderr = (c: Buffer): void => stderr.push(c);
+    const onError = (err: Error): void => finish(err);
+    const onExit = (code: number | null): void => {
+      exitCode = code; // null when killed by a signal
+      timers.push(setTimeout(() => finish(), timedOut ? 0 : PIPE_DRAIN_MS));
+    };
+    const onClose = (): void => finish();
+
     const finish = (spawnError?: Error): void => {
       if (settled) return;
       settled = true;
       for (const t of timers) clearTimeout(t);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
       if (spawnError) stderr.push(Buffer.from(`\n[Impossible de lancer la commande : ${spawnError.message}]\n`));
-      resolve({
+      const response: ExecResponse = {
         exitCode,
         stdout: stdout.toString(),
         stderr: stderr.toString(),
         timedOut,
         truncated: stdout.truncated || stderr.truncated,
         durationMs: Math.round(performance.now() - started),
-      });
+      };
+      // Never close the pipes: a background child that inherited them (`server &` without
+      // redirection) would die of SIGPIPE/EPIPE on its next write. They stay open as long as it
+      // runs (days for a dev server), so nothing of this run may stay attached to them or to the
+      // child: every closure created here would keep the captured output (up to 2 × maxOutputBytes)
+      // and the answer alive. Only module-level handlers remain: the pipes keep being drained into
+      // the void, read errors stay harmless, and the event loop is not held open.
+      for (const [pipe, onData] of [
+        [child.stdout, onStdout],
+        [child.stderr, onStderr],
+      ] as const) {
+        if (!pipe) continue;
+        pipe.off('data', onData).on('data', ignore);
+        (pipe as { unref?: () => void }).unref?.();
+      }
+      child.off('error', onError).off('exit', onExit).off('close', onClose).on('error', ignore);
+      resolve(response);
     };
 
-    child.stdout?.on('data', (c: Buffer) => stdout.push(c));
-    child.stderr?.on('data', (c: Buffer) => stderr.push(c));
-    child.on('error', (err) => finish(err));
-    child.on('exit', (code) => {
-      exitCode = code; // null when killed by a signal
-      timers.push(setTimeout(() => finish(), timedOut ? 0 : PIPE_DRAIN_MS));
-    });
-    child.on('close', () => finish());
+    child.stdout?.on('data', onStdout);
+    child.stderr?.on('data', onStderr);
+    // A read error must not crash the service (nor after the answer, while background children write).
+    child.stdout?.on('error', ignore);
+    child.stderr?.on('error', ignore);
+    child.on('error', onError);
+    child.on('exit', onExit);
+    child.on('close', onClose);
 
     timers.push(
       setTimeout(() => {

@@ -4,6 +4,7 @@ import { DESKTOP_QUERY, useMediaQuery } from '../../lib/hooks';
 import { NewChannelModal } from '../chat/NewChannelModal';
 import { FilesDrawer } from '../computer/FilesDrawer';
 import { cx } from '../ui';
+import { ConnectionBanner } from './ConnectionBanner';
 import { ConversationList } from './ConversationList';
 import { IconRail } from './IconRail';
 import { MobileTabBar } from './MobileTabBar';
@@ -47,7 +48,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <IconRail />
         </div>
         <div className="flex min-w-0 flex-1 overflow-hidden md:mt-2 md:rounded-tl-[18px] md:border-t md:border-l md:border-line md:bg-bg">
-          <aside aria-label="Agents et routines" className="hidden w-[272px] shrink-0 flex-col border-r border-line bg-surface md:flex xl:w-[300px]">
+          <aside aria-label="Conversations et routines" className="hidden w-[272px] shrink-0 flex-col border-r border-line bg-surface md:flex xl:w-[300px]">
             <ConversationList variant="sidebar" />
           </aside>
 
@@ -58,6 +59,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             )}
           >
             <PausedBanner />
+            <ConnectionBanner />
             <main className="flex min-h-0 flex-1 flex-col">{children}</main>
           </div>
 

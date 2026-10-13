@@ -1,10 +1,14 @@
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdir, open, readFile, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import type { Server } from 'node:http';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
+import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import type { FileEntry, FileReadResponse } from '@ant/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { contentDisposition, countOccurrences, numberLine } from '../src/files';
+import { contentDisposition, countOccurrences, numberLine, splitCappedLines, type CappedLine } from '../src/files';
 import { createComputerServer } from '../src/server';
 import { auth, close, listen, post, tempDir } from './helpers';
 import { testConfig } from './helpers';
@@ -45,6 +49,98 @@ describe('helpers', () => {
     expect(contentDisposition('rapport été.pdf')).toBe(`attachment; filename="rapport _t_.pdf"; filename*=UTF-8''rapport%20%C3%A9t%C3%A9.pdf`);
     expect(contentDisposition('a"b.txt')).toContain('filename="a_b.txt"');
   });
+});
+
+describe('splitCappedLines', () => {
+  async function split(chunks: Buffer[], cap: number): Promise<CappedLine[]> {
+    const out: CappedLine[] = [];
+    for await (const line of splitCappedLines(Readable.from(chunks), cap)) out.push(line);
+    return out;
+  }
+  async function viaReadline(chunks: Buffer[]): Promise<string[]> {
+    const out: string[] = [];
+    const rl = createInterface({ input: Readable.from(chunks).setEncoding('utf8'), crlfDelay: Infinity });
+    for await (const line of rl) out.push(line);
+    return out;
+  }
+  /** Deterministic pseudo-random generator (mulberry32). */
+  function rng(seed: number): () => number {
+    return () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  it('splits like readline (\\n, \\r\\n, lone \\r), even across chunk boundaries and inside UTF-8 sequences', async () => {
+    const rand = rng(42);
+    const pieces = ['a', 'b', 'é', '€', '😀', '\n', '\r', '\r\n', ' '];
+    for (let round = 0; round < 400; round++) {
+      let text = '';
+      const n = Math.floor(rand() * 40);
+      for (let k = 0; k < n; k++) text += pieces[Math.floor(rand() * pieces.length)];
+      const bytes = Buffer.from(text, 'utf8');
+      const chunks: Buffer[] = [];
+      for (let at = 0; at < bytes.length; ) {
+        const size = 1 + Math.floor(rand() * 5);
+        chunks.push(bytes.subarray(at, at + size));
+        at += size;
+      }
+      const cap = 1 + Math.floor(rand() * 6);
+      const expected = await viaReadline(chunks);
+      const got = await split(chunks, cap);
+      expect(got.map((l) => l.length), JSON.stringify(text)).toEqual(expected.map((l) => l.length));
+      expect(got.map((l) => l.head), JSON.stringify(text)).toEqual(expected.map((l) => l.slice(0, cap)));
+    }
+  });
+
+  it('keeps only the head of a long line but reports its full length', async () => {
+    const chunks = [Buffer.from('x'.repeat(70_000)), Buffer.from('y'.repeat(70_000)), Buffer.from('\nfin')];
+    expect(await split(chunks, 5)).toEqual([
+      { head: 'xxxxx', length: 140_000 },
+      { head: 'fin', length: 3 },
+    ]);
+    expect(await split([], 5)).toEqual([]);
+    expect(await split([Buffer.from('\n\n')], 5)).toEqual([
+      { head: '', length: 0 },
+      { head: '', length: 0 },
+    ]);
+  });
+});
+
+describe('files/read on a huge single-line file', () => {
+  it('does not buffer the line: a heap far smaller than the file is enough', async () => {
+    const t = await tempDir();
+    cleanups.push(t.cleanup);
+    // 64 MB, no newline and no NUL byte (so not « binary »): a minified bundle, a log without newline…
+    const fh = await open(path.join(t.dir, 'one-line.txt'), 'w');
+    const block = Buffer.alloc(1024 * 1024, 'a');
+    for (let i = 0; i < 64; i++) await fh.write(block);
+    await fh.close();
+    const filesModule = fileURLToPath(new URL('../src/files.ts', import.meta.url));
+    const script = path.join(t.dir, 'read.mjs');
+    await writeFile(
+      script,
+      `import { readWorkspaceFile } from ${JSON.stringify(filesModule)};\n` +
+        `const r = await readWorkspaceFile(${JSON.stringify(t.dir)}, { path: 'one-line.txt' });\n` +
+        `process.stdout.write(JSON.stringify(r));\n`,
+    );
+    // Heap capped at 32 MB: buffering the whole line (what readline does) crashes the process.
+    const run = spawnSync(process.execPath, ['--max-old-space-size=32', '--import', 'tsx', script], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(run.status, run.stderr.slice(-2000)).toBe(0);
+    expect(JSON.parse(run.stdout)).toEqual({
+      path: path.join(t.dir, 'one-line.txt'),
+      content: numberLine(1, `${'a'.repeat(2000)}… [ligne tronquée, 67108864 caractères]`),
+      totalLines: 1,
+      truncated: true,
+      binary: false,
+    });
+  }, 60_000);
 });
 
 describe('files endpoints', () => {

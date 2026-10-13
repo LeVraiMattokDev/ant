@@ -2,13 +2,13 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { useNavigate } from 'react-router-dom';
 import { ArrowUp, AtSign, CalendarClock, FolderOpen, Monitor, Plus } from 'lucide-react';
 import type { BotDTO } from '@ant/shared';
-import { toast } from '../../lib/toast';
+import { TOUCH_QUERY, useMediaQuery } from '../../lib/hooks';
 import { BotAvatar } from '../BotAvatar';
 import { useShell } from '../layout/shell';
 import { MenuItem, Popover } from '../Popover';
 import { Spinner, cx } from '../ui';
 import { applyMention, filterMentionCandidates, mentionAtCaret, type MentionQuery } from './mentions';
-import { draftKey, getDraft, setDraft, useSendMessage } from './useSendMessage';
+import { draftKey, getDraft, onMessageSent, setDraft, useSendMessage, useSendPending } from './useSendMessage';
 
 const MAX_HEIGHT = 240;
 
@@ -33,12 +33,30 @@ export function Composer({
   const navigate = useNavigate();
   const { openFiles, toggleComputer, computerOpen } = useShell();
   const key = draftKey(channelId, threadRootId);
+  // The Composer stays mounted across conversations: callbacks of a send compare against the conversation shown now.
+  const keyRef = useRef(key);
+  keyRef.current = key;
   const [text, setText] = useState(() => getDraft(key));
   const [mention, setMention] = useState<MentionQuery | null>(null);
   const [active, setActive] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
-  const send = useSendMessage(channelId, threadRootId);
+  const send = useSendMessage();
+  // A message still on its way from another conversation does not block this one; one of this conversation does,
+  // even after a send elsewhere (it would otherwise be posted twice).
+  const sending = useSendPending(channelId, threadRootId);
+  // On a phone, Enter adds a line (no Shift+Enter on a touch keyboard); the button sends.
+  const touch = useMediaQuery(TOUCH_QUERY);
   const listId = useId();
+
+  // The draft of a sent conversation is cleared by useSendMessage. Empty the box only if it still shows that
+  // conversation and the text that was sent (not text typed meanwhile, nor another conversation's draft).
+  useEffect(
+    () =>
+      onMessageSent((sentKey, content) => {
+        if (keyRef.current === sentKey) setText((t) => (t.trim() === content ? '' : t));
+      }),
+    [],
+  );
 
   useEffect(() => {
     setText(getDraft(key));
@@ -99,14 +117,9 @@ export function Composer({
 
   const submit = () => {
     const content = text.trim();
-    if (!content || send.isPending) return;
-    send.mutate(content, {
-      onSuccess: () => {
-        setText('');
-        setDraft(key, '');
-      },
-      onError: (err) => toast.fromError(err, 'Message non envoyé'),
-    });
+    if (!content || sending) return;
+    // Success and failure are handled by useSendMessage for every send, not only the latest one.
+    send.mutate({ content, channelId, threadRootId });
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -135,7 +148,8 @@ export function Composer({
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Touch keyboards: plain Enter falls through and inserts a newline; Ctrl/Cmd+Enter still sends (tablet keyboard).
+    if (e.key === 'Enter' && !e.shiftKey && (!touch || e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       submit();
     }
@@ -237,7 +251,7 @@ export function Composer({
             aria-autocomplete="list"
             aria-controls={showMentions ? listId : undefined}
             aria-activedescendant={showMentions ? `${listId}-${active}` : undefined}
-            enterKeyHint="send"
+            enterKeyHint={touch ? 'enter' : 'send'}
             onChange={(e) => update(e.target.value, e.target.selectionStart ?? e.target.value.length)}
             onKeyDown={onKeyDown}
             onClick={(e) => setMention(mentionAtCaret(text, e.currentTarget.selectionStart ?? text.length))}
@@ -247,15 +261,15 @@ export function Composer({
           <button
             type="button"
             onClick={submit}
-            disabled={!text.trim() || send.isPending}
+            disabled={!text.trim() || sending}
             aria-label="Envoyer"
-            title="Envoyer (Entrée) · Maj+Entrée pour une nouvelle ligne"
+            title={touch ? 'Envoyer' : 'Envoyer (Entrée) · Maj+Entrée pour une nouvelle ligne'}
             className={cx(
               'flex size-9 shrink-0 items-center justify-center rounded-full transition-colors',
               text.trim() ? 'bg-primary text-primary-fg hover:opacity-90' : 'bg-active text-subtle',
             )}
           >
-            {send.isPending ? <Spinner className="size-4 text-current" /> : <ArrowUp className="size-[18px]" strokeWidth={2.4} />}
+            {sending ? <Spinner className="size-4 text-current" /> : <ArrowUp className="size-[18px]" strokeWidth={2.4} />}
           </button>
         </div>
       </div>

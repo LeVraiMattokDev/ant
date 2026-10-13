@@ -1,10 +1,12 @@
-import { and, desc, eq, or, sql as dsql } from 'drizzle-orm';
+import { and, desc, eq, notInArray, or, sql as dsql, type SQL } from 'drizzle-orm';
 import { MEMORY_KINDS, type MemoryInput, type MemoryItemDTO, type MemoryKind, type MemoryScope } from '@ant/shared';
 import { memoryItems } from '../db/schema';
 import { memoryToDTO } from '../lib/dto';
 import { HttpError } from '../lib/errors';
 import { publish } from '../lib/events';
+import { assertActiveBot } from './bots';
 import type { Ctx } from './context';
+import { allTermsQuery, anyTermQuery } from './messages';
 
 export interface MemoryAuthor {
   kind: 'user' | 'bot';
@@ -60,6 +62,7 @@ export async function getMemory(ctx: Ctx, id: string) {
 export async function createMemory(ctx: Ctx, input: MemoryInput, author: MemoryAuthor, sourceMessageId?: string | null): Promise<MemoryItemDTO> {
   validate(input);
   if (input.scope === 'bot' && !input.botId) throw new HttpError(400, 'missing_bot', 'Une mémoire de bot doit indiquer le bot.');
+  if (input.scope === 'bot') await assertActiveBot(ctx, input.botId!);
   const [row] = await ctx.db
     .insert(memoryItems)
     .values({
@@ -86,6 +89,7 @@ export async function updateMemory(ctx: Ctx, id: string, input: Partial<MemoryIn
   const scope = input.scope ?? current.scope;
   const botId = scope === 'bot' ? (input.botId ?? current.botId) : null;
   if (scope === 'bot' && !botId) throw new HttpError(400, 'missing_bot', 'Une mémoire de bot doit indiquer le bot.');
+  if (scope === 'bot' && botId !== current.botId) await assertActiveBot(ctx, botId!);
   const [row] = await ctx.db
     .update(memoryItems)
     .set({
@@ -116,18 +120,74 @@ function visibleTo(botId: string) {
   return or(eq(memoryItems.scope, 'shared'), and(eq(memoryItems.scope, 'bot'), eq(memoryItems.botId, botId)));
 }
 
+/**
+ * Memory search for a bot's tools. Every term first; when that finds fewer than `limit` items, items holding any
+ * of the terms complete the list (a question rarely uses the words of the stored fact: « Kozmo date de sortie »
+ * must find « Projet Kozmo : lancement prévu en janvier 2027 »). Ranked by cover density, then importance.
+ */
 export async function searchMemoryForBot(ctx: Ctx, botId: string, query: string, limit = 10): Promise<MemoryItemDTO[]> {
   const q = query.trim();
-  const rows = await ctx.db
-    .select()
-    .from(memoryItems)
-    .where(q ? and(visibleTo(botId), dsql`${memoryItems.searchVector} @@ websearch_to_tsquery('french', ant_unaccent(${q}))`) : visibleTo(botId))
-    .orderBy(
-      q ? dsql`ts_rank(${memoryItems.searchVector}, websearch_to_tsquery('french', ant_unaccent(${q}))) desc` : desc(memoryItems.updatedAt),
-      desc(memoryItems.importance),
-    )
-    .limit(Math.min(limit, 30));
+  const max = Math.min(Math.max(limit, 1), 30);
+  if (!q) {
+    const recent = await ctx.db.select().from(memoryItems).where(visibleTo(botId)).orderBy(desc(memoryItems.updatedAt), desc(memoryItems.importance)).limit(max);
+    return recent.map(memoryToDTO);
+  }
+  const find = (tsq: SQL, extra: SQL[], n: number) =>
+    ctx.db
+      .select()
+      .from(memoryItems)
+      .where(and(visibleTo(botId), dsql`${memoryItems.searchVector} @@ ${tsq}`, ...extra))
+      .orderBy(dsql`ts_rank_cd(${memoryItems.searchVector}, ${tsq}) desc`, desc(memoryItems.importance), desc(memoryItems.updatedAt))
+      .limit(n);
+  const rows = await find(allTermsQuery(q), [], max);
+  if (rows.length < max) {
+    const any = anyTermQuery(q);
+    if (any) {
+      const seen = rows.map((r) => r.id);
+      rows.push(...(await find(any, seen.length ? [notInArray(memoryItems.id, seen)] : [], max - rows.length)));
+    }
+  }
   return rows.map(memoryToDTO);
+}
+
+/** Title reduced to its letters and digits, lowercase and without accents. */
+export function titleFingerprint(title: string): string {
+  return title
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+/**
+ * An item visible to the bot whose title says the same thing: same fingerprint, same French lexemes, or at least
+ * two lexemes in common covering 80 % of the shorter title. Used to keep bots from recreating a known fact.
+ */
+export async function findSimilarMemory(ctx: Ctx, botId: string, title: string): Promise<MemoryItemDTO | null> {
+  const fingerprint = titleFingerprint(title);
+  const [own] = await ctx.sql<{ lex: string[] }[]>`select tsvector_to_array(to_tsvector('french', ant_unaccent(${title}))) as lex`;
+  const lexemes = new Set(own?.lex ?? []);
+  const rows = await ctx.db
+    .select({ item: memoryItems, lex: dsql<string[]>`tsvector_to_array(to_tsvector('french', ant_unaccent(${memoryItems.title})))` })
+    .from(memoryItems)
+    .where(visibleTo(botId))
+    .orderBy(desc(memoryItems.updatedAt))
+    .limit(2000);
+  let best: (typeof rows)[number]['item'] | null = null;
+  let bestScore = 0;
+  for (const r of rows) {
+    if (fingerprint && titleFingerprint(r.item.title) === fingerprint) return memoryToDTO(r.item);
+    const common = r.lex.filter((l) => lexemes.has(l)).length;
+    if (common === 0) continue;
+    const score = common / Math.min(lexemes.size, r.lex.length);
+    const sameLexemes = common === lexemes.size && common === r.lex.length;
+    if ((sameLexemes || (common >= 2 && score >= 0.8)) && score > bestScore) {
+      best = r.item;
+      bestScore = score;
+    }
+  }
+  return best ? memoryToDTO(best) : null;
 }
 
 /** Pinned memory injected in the stable part of a bot's system prompt (bounded size). */

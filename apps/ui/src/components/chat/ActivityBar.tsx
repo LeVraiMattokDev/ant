@@ -2,13 +2,13 @@ import { useMutation } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import type { BotDTO, RunDTO } from '@ant/shared';
 import { post } from '../../lib/api';
-import { useActiveRuns } from '../../lib/queries';
+import { useActiveRuns, useWorkerDown } from '../../lib/queries';
 import { toast } from '../../lib/toast';
 import { BotAvatar } from '../BotAvatar';
 
-function describe(run: RunDTO, bot: BotDTO | undefined): string {
+function describe(run: RunDTO, bot: BotDTO | undefined, workerDown = false): string {
   const name = bot?.name ?? 'Un bot';
-  if (run.status === 'queued') return `${name} est en file d’attente`;
+  if (run.status === 'queued') return workerDown ? `${name} attend le worker` : `${name} est en file d’attente`;
   if (run.status === 'waiting_approval') return `${name} attend ta validation`;
   const act = (run.activity ?? bot?.activity ?? '').trim();
   if (!act) return `${name} réfléchit`;
@@ -37,18 +37,24 @@ export function ActivityBar({
 }) {
   const { data } = useActiveRuns();
   const cancel = useCancelRun();
+  const workerDown = useWorkerDown();
   const runs = (data ?? []).filter(
     (r) => r.channelId === channelId && (threadRootId ? r.threadRootId === threadRootId : !r.threadRootId),
   );
   if (!runs.length) return null;
   return (
     <div className="mx-auto flex w-full max-w-[880px] shrink-0 flex-wrap gap-1.5 px-4 pt-1 pb-1 md:px-6" aria-live="polite">
+      {workerDown && (
+        <div role="status" className="w-full rounded-[12px] border border-warning/40 bg-warning-soft px-3 py-1.5 text-[12.5px] text-fg">
+          Le worker ne répond pas : les bots ne peuvent pas travailler pour l’instant (voir <code>docker compose logs worker</code>).
+        </div>
+      )}
       {runs.map((run) => {
         const bot = bots.get(run.botId);
         return (
           <div key={run.id} className="flex max-w-full items-center gap-2 rounded-full border border-line bg-surface py-1 pr-1 pl-1.5 text-[12.5px] text-muted">
             <BotAvatar bot={bot} size={20} />
-            <span className="truncate">{describe(run, bot)}</span>
+            <span className="truncate">{describe(run, bot, workerDown)}</span>
             <span className="flex items-center gap-0.5 text-accent" aria-hidden="true">
               <span className="typing-dot" />
               <span className="typing-dot" />

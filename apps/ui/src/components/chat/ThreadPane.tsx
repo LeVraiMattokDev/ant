@@ -3,7 +3,8 @@ import { X } from 'lucide-react';
 import type { BotDTO } from '@ant/shared';
 import { plural } from '../../lib/format';
 import { useThread } from '../../lib/queries';
-import { ErrorBlock, LoadingBlock } from '../ui';
+import { useShell } from '../layout/shell';
+import { ErrorBlock, LoadingBlock, cx } from '../ui';
 import { ActivityBar } from './ActivityBar';
 import { Composer } from './Composer';
 import { MessageItem } from './MessageItem';
@@ -22,6 +23,9 @@ export function ThreadPane({
   onClose: () => void;
 }) {
   const thread = useThread(rootId);
+  // With the computer panel docked as well, docking the thread too would leave the conversation a sliver
+  // (1440 px: 179 px wide): the thread then stays an overlay, as it is below 1280 px.
+  const { computerOpen } = useShell();
   const scroller = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
 
@@ -45,7 +49,10 @@ export function ThreadPane({
   return (
     <section
       aria-label="Fil de discussion"
-      className="fixed inset-0 z-30 flex flex-col bg-bg md:inset-y-0 md:right-0 md:left-auto md:w-[440px] md:border-l md:border-line md:shadow-pop xl:static xl:z-auto xl:w-[420px] xl:shrink-0 xl:shadow-none 2xl:w-[480px]"
+      className={cx(
+        'fixed inset-0 z-30 flex flex-col bg-bg md:inset-y-0 md:right-0 md:left-auto md:w-[440px] md:border-l md:border-line md:shadow-pop',
+        !computerOpen && 'xl:static xl:z-auto xl:w-[420px] xl:shrink-0 xl:shadow-none 2xl:w-[480px]',
+      )}
     >
       <header className="safe-top flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
         <div className="min-w-0">

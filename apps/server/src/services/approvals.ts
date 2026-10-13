@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, lt, or, sql as dsql } from 'drizzle-orm';
 import { APPROVAL_CATEGORY_LABELS, type ApprovalCategory, type ApprovalDTO, type ApprovalStatus } from '@ant/shared';
-import { approvals } from '../db/schema';
+import { approvals, runs } from '../db/schema';
 import { approvalToDTO } from '../lib/dto';
 import { HttpError } from '../lib/errors';
 import { publish } from '../lib/events';
@@ -52,9 +52,12 @@ export async function getApproval(ctx: Ctx, id: string): Promise<ApprovalRow> {
   return row;
 }
 
+const { screenshotPng: _screenshot, ...listColumns } = getTableColumns(approvals);
+
+/** The list never needs the captures themselves (served by their own route): only whether one exists. */
 export async function listApprovals(ctx: Ctx, statuses?: ApprovalStatus[]): Promise<ApprovalDTO[]> {
   const rows = await ctx.db
-    .select()
+    .select({ ...listColumns, hasScreenshot: dsql<boolean>`${approvals.screenshotPng} is not null` })
     .from(approvals)
     .where(statuses?.length ? inArray(approvals.status, statuses) : undefined)
     .orderBy(desc(approvals.createdAt))
@@ -108,4 +111,61 @@ export async function expireApprovals(ctx: Ctx, now = new Date()): Promise<Appro
     .returning();
   for (const r of rows) await publish(ctx.sql, { type: 'approval.updated', approval: approvalToDTO(r) });
   return rows;
+}
+
+/**
+ * Claims the execution of an approved action, before anything is done. `executed_at` marks the start:
+ * only one caller gets the row, so an action re-queued after a worker restart is never run a second time.
+ * Returns null when the approval is not approved any more, or when its execution already started.
+ */
+export async function claimApprovalExecution(ctx: Ctx, id: string, now = new Date()): Promise<ApprovalRow | null> {
+  const [row] = await ctx.db
+    .update(approvals)
+    .set({ executedAt: now })
+    .where(and(eq(approvals.id, id), eq(approvals.status, 'approved'), isNull(approvals.executedAt)))
+    .returning();
+  return row ?? null;
+}
+
+/**
+ * Approved actions that no job will finish any more: their `approval.execute` job is neither pending nor running.
+ * - started (`executed_at` set): the worker stopped during the action, whose effect is unknown;
+ * - never started: the job was lost before the action began (checked only after `graceMs`, so that the
+ *   job the web service enqueues right after the decision is never mistaken for a lost one).
+ */
+export async function strandedApprovals(ctx: Ctx, now = new Date(), graceMs = 2 * 60_000): Promise<ApprovalRow[]> {
+  return ctx.db
+    .select()
+    .from(approvals)
+    .where(
+      and(
+        eq(approvals.status, 'approved'),
+        or(isNotNull(approvals.executedAt), lt(approvals.decidedAt, new Date(now.getTime() - graceMs))),
+        dsql`not exists (select 1 from jobs j where j.kind = 'approval.execute' and j.status in ('pending', 'running') and j.payload->>'approvalId' = ${approvals.id}::text)`,
+      ),
+    )
+    .limit(50);
+}
+
+/** Closes an approval that is still `approved` as failed. Atomic: returns null when someone else closed it first. */
+export async function failApprovedApproval(ctx: Ctx, id: string, result: string): Promise<ApprovalRow | null> {
+  const [row] = await ctx.db
+    .update(approvals)
+    .set({ status: 'failed', result: result.slice(0, 20_000), executedAt: dsql`coalesce(${approvals.executedAt}, now())` })
+    .where(and(eq(approvals.id, id), eq(approvals.status, 'approved')))
+    .returning();
+  if (!row) return null;
+  await publish(ctx.sql, { type: 'approval.updated', approval: approvalToDTO(row) });
+  return row;
+}
+
+/**
+ * Agent session key of the run that asked for the approval: the bot is woken up with the outcome in
+ * that session (a routine or a heartbeat has its own, not the conversation's). Undefined when the
+ * request came from no run or its run is gone: the default key of the approval's conversation applies.
+ */
+export async function approvalThreadKey(ctx: Ctx, approval: Pick<ApprovalRow, 'runId'>): Promise<string | undefined> {
+  if (!approval.runId) return undefined;
+  const run = await ctx.db.query.runs.findFirst({ columns: { threadKey: true }, where: eq(runs.id, approval.runId) });
+  return run?.threadKey;
 }

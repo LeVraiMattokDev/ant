@@ -21,6 +21,7 @@ function describeUserAgent(ua: string | null): string {
 }
 
 function ChangePassword() {
+  const qc = useQueryClient();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -33,6 +34,8 @@ function ChangePassword() {
       setNext('');
       setConfirm('');
       setError(null);
+      // The server revokes every other session: refresh the "Sessions actives" list shown on the same page.
+      void qc.invalidateQueries({ queryKey: qk.sessions });
       toast.success('Mot de passe modifié');
     },
     onError: (err) => setError(errorMessage(err)),

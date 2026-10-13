@@ -23,12 +23,14 @@ export async function computerStatus(ctx: Ctx, online: boolean): Promise<Compute
   };
 }
 
-export async function setComputerHolder(ctx: Ctx, holder: ComputerHolder): Promise<void> {
+/** `online` is the computer's real health, checked by the caller: the live event replaces the clients' cached status. */
+export async function setComputerHolder(ctx: Ctx, holder: ComputerHolder, online: boolean): Promise<void> {
   await getComputerState(ctx);
   await ctx.db.update(computerState).set({ holder, since: new Date(), updatedAt: new Date() }).where(eq(computerState.id, 1));
-  await publish(ctx.sql, { type: 'computer.updated', status: await computerStatus(ctx, true) });
+  await publish(ctx.sql, { type: 'computer.updated', status: await computerStatus(ctx, online) });
 }
 
+/** Called right after the computer answered an action, so it is online. */
 export async function recordComputerAction(ctx: Ctx, botId: string, action: string, url?: string | null): Promise<void> {
   await getComputerState(ctx);
   await ctx.db

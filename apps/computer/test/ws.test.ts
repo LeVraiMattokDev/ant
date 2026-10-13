@@ -1,6 +1,6 @@
-import { createServer as createTcpServer, type Server as TcpServer } from 'node:net';
+import { createServer as createNetServer, type Server as NetServer } from 'node:net';
 import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { createComputerServer } from '../src/server';
@@ -48,7 +48,7 @@ class FakePty implements PtyLike {
 describe('WebSocket bridges', () => {
   let server: Server;
   let base: string;
-  let vnc: TcpServer;
+  let vnc: NetServer;
   let cleanup: () => Promise<void>;
   const ptys: FakePty[] = [];
   const vncReceived: Buffer[] = [];
@@ -56,22 +56,22 @@ describe('WebSocket bridges', () => {
   beforeAll(async () => {
     const t = await tempDir();
     cleanup = t.cleanup;
-    // Fake RFB server: greets, then echoes uppercase.
-    vnc = createTcpServer((sock) => {
+    // Fake RFB server on a unix socket (like x11vnc -unixsock): greets, then echoes uppercase.
+    vnc = createNetServer((sock) => {
       sock.write('RFB 003.008\n');
       sock.on('data', (d) => {
         vncReceived.push(d);
         sock.write(Buffer.from(d.toString('latin1').toUpperCase(), 'latin1'));
       });
     });
-    await new Promise<void>((r) => vnc.listen(0, '127.0.0.1', r));
-    const vncPort = (vnc.address() as AddressInfo).port;
+    const vncSocket = path.join(t.dir, 'vnc.sock');
+    await new Promise<void>((r) => vnc.listen(vncSocket, r));
     const spawnPty: SpawnPty = (file, args, opts) => {
       const p = new FakePty(file, args, opts);
       ptys.push(p);
       return p;
     };
-    server = createComputerServer({ cfg: testConfig(t.dir, { vncPort }), ws: { spawnPty } });
+    server = createComputerServer({ cfg: testConfig(t.dir, { vncSocket }), ws: { spawnPty } });
     base = (await listen(server)).replace('http', 'ws');
   });
   afterAll(async () => {
@@ -80,7 +80,7 @@ describe('WebSocket bridges', () => {
     await cleanup();
   });
 
-  it('bridges /vnc binary frames to the TCP VNC server', async () => {
+  it('bridges /vnc binary frames to the VNC unix socket', async () => {
     const ws = new WebSocket(`${base}/vnc`, { headers: auth });
     const frames: Buffer[] = [];
     ws.on('message', (d) => frames.push(d as Buffer));
@@ -96,7 +96,7 @@ describe('WebSocket bridges', () => {
 
   it('closes /vnc when the VNC server is unreachable', async () => {
     const t = await tempDir();
-    const s = createComputerServer({ cfg: testConfig(t.dir, { vncPort: 1 }) });
+    const s = createComputerServer({ cfg: testConfig(t.dir, { vncSocket: path.join(t.dir, 'absent.sock') }) });
     const b = (await listen(s)).replace('http', 'ws');
     const ws = new WebSocket(`${b}/vnc`, { headers: auth });
     const code = await new Promise<number>((r) => ws.once('close', (c) => r(c)));

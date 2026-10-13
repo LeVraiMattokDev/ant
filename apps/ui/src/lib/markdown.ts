@@ -20,12 +20,14 @@ const mention: TokenizerAndRendererExtension = {
     return src[i] === '@' ? i : i + 1;
   },
   tokenizer(src: string): MentionToken | undefined {
-    const m = /^@([a-z0-9][a-z0-9-]{0,39})/i.exec(src);
+    // '_' belongs to handles (X, GitHub…); '.' does not: it would swallow the period ending a sentence.
+    const m = /^@([a-z0-9][a-z0-9_-]{0,39})/i.exec(src);
     if (!m) return undefined;
     return { type: 'mention', raw: m[0], slug: (m[1] ?? '').toLowerCase() };
   },
   renderer(token) {
-    return `<span class="mention">@${escapeHtml(String((token as MentionToken).slug))}</span>`;
+    // Shows the text exactly as written: tweet drafts and approval summaries are checked word for word.
+    return `<span class="mention">${escapeHtml(String((token as MentionToken).raw))}</span>`;
   },
 };
 

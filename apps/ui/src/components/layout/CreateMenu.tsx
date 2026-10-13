@@ -3,7 +3,7 @@ import { Bot, CalendarClock, Users } from 'lucide-react';
 import { MenuItem, Popover, type Placement, type TriggerProps } from '../Popover';
 import { useShell } from './shell';
 
-/** "+" menu: new bot, new group channel, new routine. */
+/** "+" menu: new bot, new team (group channel), new routine. */
 export function CreateMenu({ placement, trigger }: { placement: Placement; trigger: (p: TriggerProps) => React.ReactNode }) {
   const navigate = useNavigate();
   const { openNewChannel } = useShell();
@@ -27,7 +27,7 @@ export function CreateMenu({ placement, trigger }: { placement: Placement; trigg
               openNewChannel();
             }}
           >
-            Nouveau canal de groupe
+            Nouvelle équipe
           </MenuItem>
           <MenuItem
             icon={<CalendarClock />}

@@ -8,6 +8,7 @@
 import { clientsClaim } from 'workbox-core';
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
+import { urlBase64ToUint8Array } from './lib/vapid';
 
 declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<{ url: string; revision: string | null } | string> };
 
@@ -97,4 +98,45 @@ self.addEventListener('notificationclick', (event: NotificationEvent) => {
       await self.clients.openWindow(target);
     })(),
   );
+});
+
+/** `pushsubscriptionchange` (fired by Firefox when the push service renews a subscription); absent from the TS lib. */
+interface SubscriptionChangeEvent extends ExtendableEvent {
+  readonly oldSubscription?: PushSubscription | null;
+  readonly newSubscription?: PushSubscription | null;
+}
+
+async function postJson(path: string, body: unknown): Promise<void> {
+  const res = await fetch(path, {
+    method: 'POST',
+    credentials: 'include',
+    // Same CSRF header as the app's own requests (lib/api.ts).
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ant' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+/** Registers the renewed subscription with the server, otherwise pushes would silently stop reaching this device. */
+async function renewSubscription(event: SubscriptionChangeEvent): Promise<void> {
+  let sub = event.newSubscription ?? null;
+  if (!sub) {
+    let key: ArrayBuffer | Uint8Array<ArrayBuffer> | null = event.oldSubscription?.options.applicationServerKey ?? null;
+    if (!key) {
+      const res = await fetch('/api/push/public-key', { credentials: 'include' });
+      if (!res.ok) return;
+      const { publicKey } = (await res.json()) as { publicKey?: string | null };
+      if (!publicKey) return;
+      key = urlBase64ToUint8Array(publicKey);
+    }
+    sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  }
+  await postJson('/api/push/subscribe', sub.toJSON());
+  const old = event.oldSubscription;
+  if (old && old.endpoint !== sub.endpoint) await postJson('/api/push/unsubscribe', { endpoint: old.endpoint }).catch(() => undefined);
+}
+
+self.addEventListener('pushsubscriptionchange' as keyof ServiceWorkerGlobalScopeEventMap, (event) => {
+  const e = event as SubscriptionChangeEvent;
+  e.waitUntil(renewSubscription(e).catch(() => undefined));
 });

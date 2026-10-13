@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, or } from 'drizzle-orm';
 import { NUDGE_KINDS, TRIAGE_EFFORT, TRIAGE_MODEL, isWithinRange, type AppSettings } from '@ant/shared';
 import { bots, channelMembers, messages } from '../db/schema';
 import { audit, botActor } from '../lib/audit';
@@ -90,7 +90,18 @@ export async function runHeartbeat(deps: WorkerDeps, botId: string, force = fals
   if (!bot || bot.archivedAt || bot.paused) return { status: 'skipped', reason: 'bot en pause ou archivé' };
   if (!force && !bot.heartbeatEnabled) return { status: 'skipped', reason: 'heartbeat désactivé' };
   if (!force && isQuietFor(bot, settings, now)) return { status: 'skipped', reason: 'heures de silence' };
-  await ctx.db.update(bots).set({ lastHeartbeatAt: now }).where(eq(bots.id, bot.id));
+  // Atomic claim of the slot: a second job (enqueued under the next slot key while the first one waited
+  // for an aux slot, or claimed at the same time) finds the heartbeat already done and stops here.
+  const claimed = await ctx.db
+    .update(bots)
+    .set({ lastHeartbeatAt: now })
+    .where(
+      force
+        ? eq(bots.id, bot.id)
+        : and(eq(bots.id, bot.id), or(isNull(bots.lastHeartbeatAt), lte(bots.lastHeartbeatAt, new Date(now.getTime() - bot.heartbeatIntervalMin * 60_000)))),
+    )
+    .returning({ id: bots.id });
+  if (claimed.length === 0) return { status: 'skipped', reason: 'heartbeat déjà fait pour cet intervalle' };
 
   const [memory, tasks, activity, previous] = await Promise.all([
     pinnedMemoryBlock(ctx, bot.id, 4000),

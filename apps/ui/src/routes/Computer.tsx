@@ -60,6 +60,12 @@ function ActivityList() {
   );
 }
 
+/** "depuis 16 min"; a change less than a minute old (or slightly ahead, with clock skew) reads "à l’instant". */
+export function sinceLabel(iso: string, now = Date.now()): string {
+  const rel = formatRelative(iso, now);
+  return rel.startsWith('il y a ') ? `depuis ${rel.slice('il y a '.length)}` : 'à l’instant';
+}
+
 function StatusBar({ status }: { status: ComputerStatusDTO }) {
   const bots = useBotMap();
   const active = status.activeBotId ? bots.get(status.activeBotId) : undefined;
@@ -71,7 +77,7 @@ function StatusBar({ status }: { status: ComputerStatusDTO }) {
         <span className="font-medium">{status.holder === 'user' ? 'toi' : 'les agents'}</span>
         <span className="text-subtle" title={formatFull(status.since)}>
           {' '}
-          depuis {formatRelative(status.since).replace(/^il y a /, '')}
+          {sinceLabel(status.since)}
         </span>
       </span>
       {active && (

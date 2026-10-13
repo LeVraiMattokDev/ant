@@ -57,7 +57,12 @@ export function UsageChart({ data, metric }: { data: DayBucket[]; metric: UsageM
 
   return (
     <div ref={ref} className="relative w-full">
-      <svg width={width} height={HEIGHT} role="img" aria-label={`Consommation quotidienne par source de calcul, ${data.length} derniers jours`}>
+      <svg
+        width={width}
+        height={HEIGHT}
+        role="img"
+        aria-label={`Consommation quotidienne par source de calcul, ${data.length} derniers jours. Détail dans « Voir les données jour par jour ».`}
+      >
         {ticks.map((t) => (
           <g key={t}>
             <line x1={M.left} x2={width - M.right} y1={y(t)} y2={y(t)} stroke="var(--ant-line)" strokeWidth={1} />
@@ -88,19 +93,16 @@ export function UsageChart({ data, metric }: { data: DayBucket[]; metric: UsageM
                   {dayLabel(d.day)}
                 </text>
               )}
+              {/* Pointer only: keyboard and screen-reader users get the same figures from the day-by-day table, not 7 to 90 tab stops. */}
               <rect
+                data-day={d.day}
                 x={M.left + band * i}
                 y={M.top}
                 width={band}
                 height={innerH}
                 fill="transparent"
-                tabIndex={0}
-                aria-label={`${longDay(d.day)} : abonnement ${fmt(d.subscription)}, crédits API ${fmt(d.api)}`}
                 onMouseEnter={() => setHover(i)}
                 onMouseLeave={() => setHover(null)}
-                onFocus={() => setHover(i)}
-                onBlur={() => setHover(null)}
-                className="outline-none"
               />
             </g>
           );
@@ -109,7 +111,7 @@ export function UsageChart({ data, metric }: { data: DayBucket[]; metric: UsageM
       </svg>
       {hovered && hover !== null && (
         <div
-          role="tooltip"
+          aria-hidden="true"
           className="pointer-events-none absolute z-10 min-w-40 rounded-[12px] border border-line bg-surface px-2.5 py-2 text-[12px] shadow-pop"
           style={{
             left: Math.min(width - 170, Math.max(0, M.left + band * hover + band / 2 - 80)),

@@ -32,6 +32,45 @@ const PAGE = `<!doctype html><html><head><title>Page de test</title></head><body
 <div style="height:3000px"></div>
 </body></html>`;
 
+/** A feed with several same-label buttons; « Nouveau » prepends a row, « Dupliquer » clones Bob's row. */
+const FEED = `<!doctype html><html><head><title>Fil</title></head><body>
+<ul id="feed">
+<li>Alice <button onclick="follow('Alice')">Suivre</button></li>
+<li id="bob">Bob <button onclick="follow('Bob')">Suivre</button></li>
+<li>Carol <button onclick="follow('Carol')">Suivre</button></li>
+</ul>
+<button id="add" onclick="addRow()">Nouveau</button>
+<button id="dup" onclick="dupBob()">Dupliquer</button>
+<p id="out"></p>
+<script>
+function follow(n) { document.getElementById('out').textContent += 'Suivi : ' + n + ';'; }
+function addRow() {
+  var li = document.createElement('li');
+  li.innerHTML = 'Mallory <button onclick="follow(\\'Mallory\\')">Suivre</button>';
+  var feed = document.getElementById('feed');
+  feed.insertBefore(li, feed.firstChild);
+}
+function dupBob() { var li = document.getElementById('bob'); li.parentNode.appendChild(li.cloneNode(true)); }
+</script>
+</body></html>`;
+
+/** Pins planted by the page itself: a short non-UUID and a 100 kB string. */
+const PLANTED = `<!doctype html><html><head><title>Épingles plantées</title></head><body>
+<button id="short" data-ant-pin="x" onclick="hit('court')">Court</button>
+<button id="long" onclick="hit('long')">Long</button>
+<p id="out"></p>
+<script>
+document.getElementById('long').setAttribute('data-ant-pin', 'a'.repeat(100000));
+function hit(n) { document.getElementById('out').textContent += 'Clic : ' + n + ';'; }
+</script>
+</body></html>`;
+
+/** A planted pin plus a RegExp that accepts anything: the page lies to the in-page check. */
+const TAMPERED = `<!doctype html><html><head><title>Piège</title></head><body>
+<button id="trap" data-ant-pin="x">Piégé</button>
+<script>window.RegExp = function () { return { test: function () { return true; } }; };</script>
+</body></html>`;
+
 describe.skipIf(!chromiumAvailable())('browser (headless Chromium)', () => {
   let site: Server;
   let siteUrl: string;
@@ -45,6 +84,14 @@ describe.skipIf(!chromiumAvailable())('browser (headless Chromium)', () => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       if (req.url === '/webdriver') {
         res.end('<title>wd</title><p id="wd"></p><script>document.getElementById("wd").textContent = "webdriver=" + navigator.webdriver + " lang=" + navigator.language;</script>');
+        return;
+      }
+      if (req.url === '/feed') {
+        res.end(FEED);
+        return;
+      }
+      if (req.url === '/planted' || req.url === '/tampered') {
+        res.end(req.url === '/planted' ? PLANTED : TAMPERED);
         return;
       }
       res.end(req.url === '/second' ? '<title>Deuxième</title><p>Seconde page</p>' : PAGE);
@@ -143,6 +190,84 @@ describe.skipIf(!chromiumAvailable())('browser (headless Chromium)', () => {
     expect(unknown.body.elementLabel).toBeNull();
     const none = await post(base, '/browser/inspect', {});
     expect(none.status).toBe(400);
+  });
+
+  it('inspect pins the exact element: the approved click cannot land on another one after a new read', async () => {
+    type Inspected = BrowserTargetInfo & { screenshotPng?: string };
+    await act({ action: 'goto', url: `${siteUrl}/feed` });
+    const before = await act({ action: 'read' });
+    expect(before.elements?.slice(0, 3)).toEqual([
+      { ref: 'e1', role: 'button', name: 'Suivre' },
+      { ref: 'e2', role: 'button', name: 'Suivre' },
+      { ref: 'e3', role: 'button', name: 'Suivre' },
+    ]);
+    // Approval card for « click e2 » (Bob's button).
+    const card = await post<Inspected>(base, '/browser/inspect', { ref: 'e2' });
+    expect(card.status).toBe(200);
+    expect(card.body.elementLabel).toBe('Suivre');
+    const pin = card.body.pin!;
+    expect(pin).toMatch(/^[0-9a-f-]{36}$/);
+    // A second card on the same node reuses its pin (both approvals stay valid).
+    expect((await post<Inspected>(base, '/browser/inspect', { ref: 'e2' })).body.pin).toBe(pin);
+
+    // While the approval waits, the feed changes and another run reads the page: e2 is now Alice.
+    expect((await act({ action: 'click', selector: '#add' })).ok).toBe(true);
+    const after = await act({ action: 'read' });
+    expect(after.elements?.slice(0, 4).map((e) => e.name)).toEqual(['Suivre', 'Suivre', 'Suivre', 'Suivre']);
+
+    // Execution-time check by pin, then the click itself: Bob, and only Bob.
+    const recheck = await post<Inspected>(base, '/browser/inspect', { pin });
+    expect(recheck.body).toMatchObject({ elementLabel: 'Suivre', pin });
+    expect((await act({ action: 'click', pin })).ok).toBe(true);
+    expect((await act({ action: 'read' })).text).toContain('Suivi : Bob;');
+    expect((await act({ action: 'read' })).text).not.toMatch(/Suivi : (Alice|Mallory|Carol)/);
+
+    // Never a guess: a pin matching several nodes, or none, is refused.
+    expect((await act({ action: 'click', selector: '#dup' })).ok).toBe(true);
+    const ambiguous = await act({ action: 'click', pin });
+    expect(ambiguous.ok).toBe(false);
+    expect(ambiguous.error).toMatch(/ambigu/);
+    expect((await post<Inspected>(base, '/browser/inspect', { pin })).body.elementLabel).toBeNull();
+
+    await act({ action: 'goto', url: `${siteUrl}/feed` }); // reload: the pinned node is gone
+    const gone = await act({ action: 'click', pin });
+    expect(gone.ok).toBe(false);
+    expect(gone.error).toMatch(/n'est plus sur la page/);
+    const goneCard = await post<Inspected>(base, '/browser/inspect', { pin });
+    expect(goneCard.body.elementLabel).toBeNull();
+    expect(goneCard.body.pin).toBeUndefined();
+    expect((await act({ action: 'press', pin, key: 'Enter' })).ok).toBe(false);
+
+    const invalid = await act({ action: 'click', pin: 'e2' });
+    expect(invalid.ok).toBe(false);
+    expect(invalid.error).toMatch(/Épingle d'élément invalide/);
+    expect((await post(base, '/browser/inspect', { pin: 'e2' })).status).toBe(400);
+    await act({ action: 'goto', url: `${siteUrl}/` });
+  });
+
+  it('inspect never hands out a pin planted by the page', async () => {
+    type Inspected = BrowserTargetInfo & { screenshotPng?: string };
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    await act({ action: 'goto', url: `${siteUrl}/planted` });
+    for (const selector of ['#short', '#long']) {
+      const card = await post<Inspected>(base, '/browser/inspect', { selector });
+      expect(card.status).toBe(200);
+      expect(card.body.elementLabel).toBe(selector === '#short' ? 'Court' : 'Long');
+      const pin = card.body.pin!;
+      expect(pin).toMatch(uuid);
+      // The fresh pin replaced the planted value on that node: it is kept and the approval works.
+      expect((await post<Inspected>(base, '/browser/inspect', { selector })).body.pin).toBe(pin);
+      expect((await act({ action: 'click', pin })).ok).toBe(true);
+    }
+    expect((await act({ action: 'read' })).text).toContain('Clic : court;Clic : long;');
+
+    // Builtins tampered with by the page: still no pin other than a UUID.
+    await act({ action: 'goto', url: `${siteUrl}/tampered` });
+    const trapped = await post<Inspected>(base, '/browser/inspect', { selector: '#trap' });
+    expect(trapped.status).toBe(200);
+    expect(trapped.body.elementLabel).toBe('Piégé');
+    expect(trapped.body.pin).toBeUndefined();
+    await act({ action: 'goto', url: `${siteUrl}/` });
   });
 
   it('click on a link navigates; back returns', async () => {

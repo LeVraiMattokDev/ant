@@ -34,6 +34,8 @@ export function useMediaQuery(query: string): boolean {
 }
 
 export const DESKTOP_QUERY = '(min-width: 768px)';
+/** Touch screen without a fine pointer (phone, tablet): the on-screen keyboard has no Shift+Enter. */
+export const TOUCH_QUERY = '(hover: none) and (pointer: coarse)';
 
 /** A value remembered in localStorage for this viewer (falls back to memory when storage is unavailable). */
 export function useStoredState<T extends string>(key: string, initial: T, allowed: readonly T[]): [T, (v: T) => void] {

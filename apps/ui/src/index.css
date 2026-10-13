@@ -71,10 +71,11 @@
   --ant-primary-fg: #ffffff;
   --ant-danger: #c43636;
   --ant-danger-soft: rgb(196 54 54 / 0.08);
-  --ant-success: #237a51;
-  --ant-success-soft: rgb(35 122 81 / 0.09);
-  --ant-warning: #946c06;
-  --ant-warning-soft: rgb(148 108 6 / 0.09);
+  /* success and warning stay at 4.5:1 or more for small text, on their soft chips and on a selected row (bg-active). */
+  --ant-success: #1f6e49;
+  --ant-success-soft: rgb(31 110 73 / 0.09);
+  --ant-warning: #775704;
+  --ant-warning-soft: rgb(119 87 4 / 0.09);
   --ant-info: #2864a8;
   --ant-info-soft: rgb(40 100 168 / 0.08);
   --ant-mark: rgb(232 170 70 / 0.38);
@@ -517,6 +518,8 @@
     border: 1px solid var(--ant-line);
     padding: 4px 8px;
     text-align: left;
+    /* `anywhere` (inherited from .md) shrinks each column to one character on a phone; whole words make the table scroll instead. */
+    overflow-wrap: normal;
   }
   .md th {
     background: var(--ant-hover);

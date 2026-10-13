@@ -1,4 +1,4 @@
-# Ant — déploiement sur la VM Debian (voir README.md).
+# Ant — déploiement sur la VM Debian ou le conteneur LXC (voir README.md).
 # Seul le service `web` est publié ; Nginx Proxy Manager termine le HTTPS devant lui.
 name: ant
 
@@ -52,7 +52,10 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@localhost}
-      TRUST_PROXY: ${TRUST_PROXY:-true}
+      # Proxys autorisés à fixer l'adresse du client (X-Forwarded-For). Le défaut (réseaux privés) inclut le
+      # réseau sandbox de l'ordinateur des agents : mets l'IP exacte de Nginx Proxy Manager dès la première
+      # connexion. Jamais « true ». Voir README § 7.
+      TRUST_PROXY: ${TRUST_PROXY:-loopback,linklocal,uniquelocal}
       TZ: ${TZ:-Europe/Zurich}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
@@ -103,6 +106,18 @@ services:
       context: .
       dockerfile: apps/computer/Dockerfile
     image: ant-computer:local
+    # Racine en lecture seule : ce qu'un agent écrit hors de /workspace et du profil navigateur
+    # (~/.bashrc, ~/.profile, ~/.local…) disparaît au redémarrage du conteneur.
+    # exec : nécessaire aux scripts lancés depuis /tmp et aux outils installés avec pip --user.
+    # /tmp/.X11-unix : dossier des sockets X appartenant à root, comme Xvfb l'attend.
+    # Ces tmpfs et /dev/shm sont pris sur mem_limit : 768m + 512m + 256m au plus, sur les 3g par défaut.
+    # Chromium place sa mémoire partagée dans /tmp (--disable-dev-shm-usage), d'où un /dev/shm réduit.
+    # Les caches de pip et npm ne vont pas en mémoire (apps/computer/Dockerfile).
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,exec,size=768m
+      - /tmp/.X11-unix:mode=1777,size=1m
+      - /home/agent:uid=1000,gid=1000,mode=0755,exec,size=512m
     environment:
       COMPUTER_RPC_TOKEN: ${COMPUTER_RPC_TOKEN}
       TZ: ${TZ:-Europe/Zurich}
@@ -110,7 +125,7 @@ services:
       - workspace:/workspace
       - browser-profile:/home/agent/.ant-browser
     networks: [sandbox]
-    shm_size: 1gb
+    shm_size: 256mb
     pids_limit: 1024
     mem_limit: ${COMPUTER_MEMORY:-3g}
     cpus: ${COMPUTER_CPUS:-2}
@@ -120,6 +135,7 @@ services:
     image: postgres:17-alpine
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     entrypoint: ["/bin/sh", "/backup.sh"]
+    # Sauvegarde vérifiée chaque nuit, retentée toutes les 10 min (6 fois au plus) en cas d'échec.
     environment:
       PGHOST: postgres
       PGUSER: ant
@@ -130,11 +146,18 @@ services:
       TZ: ${TZ:-Europe/Zurich}
     volumes:
       - ./deploy/backup.sh:/backup.sh:ro
-      - ${BACKUP_DIR:-./backups}:/backups
+      - ${BACKUP_DIR:-/var/backups/ant}:/backups
     networks: [internal]
     depends_on:
       postgres:
         condition: service_healthy
+    # « unhealthy » dans docker compose ps : dernière tentative en échec, ou aucune sauvegarde de moins de 36 h.
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/backup.sh", "--check"]
+      interval: 5m
+      timeout: 30s
+      start_period: 1m
+      retries: 1
 
 volumes:
   pgdata:

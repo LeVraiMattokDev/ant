@@ -76,6 +76,24 @@ export function describeElements(raws: readonly RawElement[]): BrowserElement[] 
   return raws.slice(0, MAX_ELEMENTS).map(describeElement);
 }
 
+/**
+ * Pin set by `inspect` on the exact node shown on an approval card. Unlike refs, `read` never
+ * clears it: an approved action still targets that node after other reads renumbered the refs.
+ */
+export const PIN_ATTR = 'data-ant-pin';
+/** Format of a pin: the lowercase UUID (`randomUUID()`) that `inspect` issued. */
+export const PIN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function isPin(value: string): boolean {
+  return PIN_RE.test(value);
+}
+
+/** `pin` returned by `inspect` (a UUID) → CSS selector. */
+export function pinSelector(pin: string): string {
+  if (!isPin(pin)) throw new Error(`Épingle d'élément invalide : « ${pin.slice(0, 64)} ».`);
+  return `[${PIN_ATTR}="${pin}"]`;
+}
+
 /** `ref` from a previous read ("e12") → CSS selector. */
 export function refSelector(ref: string): string {
   const trimmed = ref.trim();

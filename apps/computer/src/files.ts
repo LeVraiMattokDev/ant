@@ -1,7 +1,7 @@
 import { createReadStream, type Stats } from 'node:fs';
 import { lstat, mkdir, open, readdir, readFile as fsReadFile, rm, stat, writeFile as fsWriteFile, appendFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createInterface } from 'node:readline';
+import { StringDecoder } from 'node:string_decoder';
 import type { FileEditRequest, FileEntry, FileReadRequest, FileReadResponse, FileWriteRequest } from '@ant/shared';
 import { badRequest, HttpError, toHttpError } from './errors';
 import { resolveWorkspacePath, type ResolvedPath } from './paths';
@@ -43,6 +43,61 @@ export function numberLine(n: number, line: string): string {
   return `${String(n).padStart(6, ' ')}\t${line}`;
 }
 
+/** One line of a text file: its first `cap` characters, and its full length. */
+export interface CappedLine {
+  head: string;
+  length: number;
+}
+
+/**
+ * Splits a byte stream into lines exactly like readline (`\n`, `\r\n` or a lone `\r`), but never
+ * holds more than `cap` characters of a line. readline builds every line in full: a single huge line
+ * (minified file, log without newline) fills the memory, and past ~512 Mi characters throws an
+ * uncaught RangeError inside the stream, which kills the whole service.
+ */
+export async function* splitCappedLines(chunks: AsyncIterable<Buffer>, cap: number): AsyncGenerator<CappedLine> {
+  const breaks = /\r\n|\r|\n/g; // one per call: concurrent reads must not share lastIndex
+  const decoder = new StringDecoder('utf8');
+  let head = '';
+  let length = 0;
+  let pendingCR = false; // the previous chunk ended with a lone \r: a leading \n completes that CRLF
+  const take = (s: string, from: number, to: number): void => {
+    if (head.length < cap) head += s.slice(from, Math.min(to, from + cap - head.length));
+    length += to - from;
+  };
+  const flush = (): CappedLine => {
+    const line = { head, length };
+    head = '';
+    length = 0;
+    return line;
+  };
+  for await (const chunk of chunks) {
+    const s = decoder.write(chunk);
+    if (!s) continue;
+    let i: number = pendingCR && s.startsWith('\n') ? 1 : 0;
+    pendingCR = false;
+    breaks.lastIndex = i;
+    for (let m = breaks.exec(s); m; m = breaks.exec(s)) {
+      take(s, i, m.index);
+      yield flush();
+      i = breaks.lastIndex;
+      pendingCR = m[0] === '\r' && i === s.length;
+    }
+    take(s, i, s.length);
+  }
+  const rest = decoder.end();
+  take(rest, 0, rest.length);
+  if (length > 0) yield flush();
+}
+
+/**
+ * Standalone copy of a kept line: a slice of a decoded chunk keeps that whole chunk (64 KiB)
+ * alive in V8, which 10 000 kept lines of a file with long lines would multiply.
+ */
+function detach(s: string): string {
+  return Buffer.from(s, 'utf16le').toString('utf16le');
+}
+
 export async function readWorkspaceFile(root: string, req: FileReadRequest): Promise<FileReadResponse> {
   const target = await resolve(root, req.path);
   const st = await statOrThrow(target);
@@ -60,13 +115,13 @@ export async function readWorkspaceFile(root: string, req: FileReadRequest): Pro
   let total = 0;
   let cut = false;
 
-  const rl = createInterface({ input: createReadStream(target.abs, { encoding: 'utf8' }), crlfDelay: Infinity });
-  for await (const line of rl) {
+  // Every line is still counted (totalLines), but only MAX_LINE_CHARS of each is ever kept in memory.
+  for await (const line of splitCappedLines(createReadStream(target.abs), MAX_LINE_CHARS)) {
     total++;
     if (total < offset || total > last) continue;
-    let text = line;
-    if (text.length > MAX_LINE_CHARS) {
-      text = `${text.slice(0, MAX_LINE_CHARS)}… [ligne tronquée, ${line.length} caractères]`;
+    let text = detach(line.head);
+    if (line.length > MAX_LINE_CHARS) {
+      text = `${text}… [ligne tronquée, ${line.length} caractères]`;
       cut = true;
     }
     out.push(numberLine(total, text));

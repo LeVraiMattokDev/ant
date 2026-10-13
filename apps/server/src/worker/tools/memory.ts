@@ -2,7 +2,7 @@ import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { MEMORY_KINDS } from '@ant/shared';
 import { audit, botActor } from '../../lib/audit';
-import { botCanEditMemory, createMemory, deleteMemory, searchMemoryForBot, updateMemory } from '../../services/memory';
+import { botCanEditMemory, createMemory, deleteMemory, findSimilarMemory, searchMemoryForBot, updateMemory } from '../../services/memory';
 import type { RunContext } from '../run-context';
 import { clip, fail, guarded, ok } from './helpers';
 
@@ -12,7 +12,7 @@ export function memoryTools(rc: RunContext) {
 
   const search = tool(
     'memory_search',
-    'Cherche dans la mémoire partagée (qui est le propriétaire, ses projets, ses préférences) et dans ta mémoire personnelle.',
+    'Cherche dans la mémoire partagée (qui est le propriétaire, ses projets, ses préférences) et dans ta mémoire personnelle. Les éléments qui contiennent tous les mots viennent en premier, puis ceux qui en contiennent au moins un.',
     { query: z.string().max(500).describe('Mots-clés ; vide pour les éléments récents'), limit: z.number().int().min(1).max(30).optional() },
     async (args) =>
       guarded(async () => {
@@ -30,7 +30,7 @@ export function memoryTools(rc: RunContext) {
 
   const write = tool(
     'memory_write',
-    'Retient un fait durable, une préférence, un projet ou une décision. Pas de détails éphémères.',
+    'Retient un fait durable, une préférence, un projet ou une décision. Pas de détails éphémères. Si un élément au titre proche existe déjà, rien n’est écrit : complète-le avec memory_update.',
     {
       scope: z.enum(['bot', 'shared']).describe('"bot" = ta mémoire ; "shared" = mémoire partagée de tous les bots'),
       kind: z.enum(MEMORY_KINDS),
@@ -39,18 +39,27 @@ export function memoryTools(rc: RunContext) {
       tags: z.array(z.string().max(40)).max(10).optional(),
       pinned: z.boolean().optional().describe('Épingler = toujours présent dans ton contexte. À réserver à l’essentiel.'),
       importance: z.number().int().min(1).max(5).optional(),
+      force: z.boolean().optional().describe('true = écrire même si un élément au titre proche existe (fait réellement distinct).'),
     },
-    async (args) =>
+    async ({ force, ...args }) =>
       guarded(async () => {
         if (args.scope === 'shared' && !rc.permissions.sharedMemoryWrite) {
           return fail('Tu n’as pas le droit d’écrire dans la mémoire partagée : utilise scope "bot".');
+        }
+        if (!force) {
+          const similar = await findSimilarMemory(ctx, rc.bot.id, args.title);
+          if (similar) {
+            return fail(
+              `Élément proche existant (id ${similar.id}, « ${similar.title} ») : utilise memory_update pour le compléter, ou force: true s’il s’agit vraiment d’un autre fait.\nContenu actuel : ${clip(similar.content, 1500)}`,
+            );
+          }
         }
         const item = await createMemory(
           ctx,
           { ...args, botId: args.scope === 'bot' ? rc.bot.id : null },
           { kind: 'bot', botId: rc.bot.id },
         );
-        await audit(ctx.db, { actor, event: 'memory.write', runId: rc.run.id, tool: 'memory_write', detail: { id: item.id, ...args } });
+        await audit(ctx.db, { actor, event: 'memory.write', runId: rc.run.id, tool: 'memory_write', detail: { id: item.id, ...args, ...(force ? { force } : {}) } });
         return ok(`Mémorisé (id ${item.id}).`);
       }),
   );

@@ -23,11 +23,28 @@ Ce document dit ce qui est fait, comment c'est vérifié, et ce qui reste limit�
     - Heartbeat, résumé, routines, compactage, alertes.
   - `apps/computer` : confinement des chemins, exécution, fichiers, WebSockets, Chromium réel.
   - `apps/ui` : logique du cache temps réel et rendu des composants.
+  - `deploy` (`node --test deploy/tests/*.test.mjs`) :
+    - sauvegarde : nouvelle tentative après un `pg_dump` en échec, archive invalide jamais gardée, abandon après 6 échecs
+      dans la journée, droits 600, état du healthcheck, arrêt immédiat sur SIGTERM quand le script est le PID 1 ;
+    - restauration sur un vrai PostgreSQL avec les migrations d'Ant : retour à l'état du dump après une migration plus récente,
+      ancienne base conservée, base intacte si l'archive est corrompue ou si la restauration échoue ;
+    - mise à jour dans un vrai dépôt git : sauvegarde avant le redémarrage, arrêt si elle échoue, commande de retour arrière ;
+      après un échec (construction, sauvegarde, démarrage de `web`), une simple relance vise toujours la version d'avant et le
+      dump d'avant la première tentative, y compris après un retour arrière ; image PostgreSQL non téléchargée sans conséquence ;
+    - pare-feu appliqué avec le vrai iptables dans un espace réseau isolé : DNS du LAN autorisé (port 53 seulement), reste
+      du LAN refusé.
 - **Essais réels**
   - Services web et worker compilés puis démarrés pour de vrai.
   - Parcours complet par l'API : configuration, TOTP, refus du WebSocket sans session, création de bot, message, pause faute d'identifiants.
   - **Image Docker de production** (lecture seule, sans capacités Linux) : le binaire Claude Code de l'Agent SDK démarre, joint l'API d'Anthropic, et un identifiant refusé est détecté et géré.
-  - **Image de l'ordinateur** avec le durcissement de docker-compose : Chromium sur écran virtuel, commandes en utilisateur non privilégié sans secret, VNC, terminal.
+  - **Image de l'ordinateur** construite avec le Dockerfile actuel et démarrée avec le service `computer` de docker-compose
+    (racine en lecture seule, `/tmp` et `/home/agent` en tmpfs, sans capacités) : sain, Xvfb, openbox, x11vnc (socket unix) et
+    tmux démarrent ; commandes, environnement virtuel Python dans `/tmp`, Chromium à profil persistant (page chargée et lue).
+    Après redémarrage, un `~/.bashrc` modifié a disparu, `/workspace` et le profil navigateur sont conservés.
+  - **Images plus légères** : serveur 960 Mo (1,32 Go avant ; `node_modules` 337 Mo au lieu de 577, sans le binaire Claude Code
+    musl inutile), ordinateur 2,16 Go (3,08 Go avant ; `node_modules` 81 Mo au lieu de 722). L'image serveur, construite en
+    entier (interface comprise), démarre en lecture seule contre PostgreSQL (migrations, interface, `/healthz`), et son binaire
+    Claude Code répond.
   - **Interface réelle contre le vrai serveur**, dans un Chromium headless :
     - parcours de configuration complet (jeton, mot de passe, TOTP, codes de secours) ;
     - message à un bot, puis affichage de la pause et de sa raison ;
@@ -36,9 +53,16 @@ Ce document dit ce qui est fait, comment c'est vérifié, et ce qui reste limit�
 
 ## Ce qui n'a pas pu être vérifié ici
 
-- **Construction complète de l'image serveur avec l'interface** : interrompue ici par une limite de requêtes de Docker Hub (429).
-  L'image serveur a été construite et démarrée sans l'étape de l'interface, et cette étape (`pnpm --filter @ant/ui build`)
-  passe à l'identique en local. Sur ta VM, `docker compose build` exécute l'ensemble.
+- **Service `backup` dans son image `postgres:17-alpine`** (busybox) et **pile complète lancée par `deploy/upgrade.sh`** :
+  Docker Hub a refusé l'image PostgreSQL (429, limite de requêtes). `backup.sh` est testé avec `/bin/sh` (dash, POSIX comme busybox) contre
+  un vrai PostgreSQL, et `upgrade.sh` avec un faux `docker`. Au premier déploiement : `docker compose ps backup` doit passer à
+  `healthy` (5 min après le démarrage), puis vérifier la première sauvegarde avec `docker compose logs backup`.
+- **Image de l'ordinateur avec ses derniers réglages** (`/tmp` de 768 Mo, dossier personnel de 512 Mo, `/dev/shm` de 256 Mo,
+  pip sans cache et cache npm dans `/workspace`) : pas de démon Docker ici. Les fichiers de configuration de pip et npm ont été
+  vérifiés hors image. Au premier déploiement : `docker compose exec computer pip cache dir` doit répondre que le cache est
+  désactivé, et `docker compose exec computer npm config get cache` afficher `/workspace/.cache/npm`.
+- **Étapes Proxmox du CT LXC** (options de montage du NAS, délai de démarrage) : pas de Proxmox ici, les commandes du README
+  suivent la documentation de Proxmox VE 8.
 - **Appels réels à Claude avec ton abonnement ou ta clé API** : aucun identifiant valide n'existe dans l'environnement de développement.
   L'intégration est vérifiée jusqu'à l'API d'Anthropic (refus d'une fausse clé), mais pas une vraie réponse de modèle.
   À tester en premier après déploiement : un message à un bot, puis l'écran Quota & budget.
@@ -62,3 +86,8 @@ Ce document dit ce qui est fait, comment c'est vérifié, et ce qui reste limit�
 6. **Pas de recherche sémantique** dans la mémoire (Claude uniquement, pas d'embeddings) : la recherche est en plein texte.
 7. **Hors périmètre v1**, comme prévu : la voix et les connecteurs Gmail, Calendar, X, GitHub et Discord. L'architecture les
    prévoit (outils MCP supplémentaires + table de connecteurs).
+8. **Ordinateur des agents en lecture seule** : ce qu'un agent installe hors de `/workspace` et du profil navigateur
+   (`pip install --user`, fichiers de `~`) disparaît au redémarrage du conteneur. `/tmp` (768 Mo, mémoire partagée de Chromium
+   comprise) et le dossier personnel (512 Mo) sont pris sur la mémoire du conteneur : le cache de pip est désactivé, celui de
+   npm est dans `/workspace/.cache/npm`, et les gros outils s'installent dans `/workspace` (par exemple un environnement
+   virtuel Python).

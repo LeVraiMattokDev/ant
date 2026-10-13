@@ -48,6 +48,20 @@ export interface AuthSessionDTO {
   userAgent: string | null;
 }
 
+/** GET /api/system/network: what the web service sees of the connection, to set TRUST_PROXY to the proxy's exact address. */
+export interface NetworkInfoDTO {
+  /** Address of the peer that opened the TCP connection (Nginx Proxy Manager when Ant sits behind it). */
+  peerAddress: string | null;
+  /** Client address retained after applying TRUST_PROXY (used for throttling, sessions and the audit log). */
+  clientIp: string;
+  /** X-Forwarded-For header as received, if any. */
+  forwardedFor: string | null;
+  /** Current TRUST_PROXY value. */
+  trustProxy: string;
+  /** True when every hop is trusted ('true'): X-Forwarded-For can then be forged by any client. */
+  trustAll: boolean;
+}
+
 // ───────────────────────────── Bots ─────────────────────────────
 
 export interface BotPermissions {
@@ -191,8 +205,16 @@ export interface PostMessageInput {
 export interface SearchResultDTO {
   message: MessageDTO;
   channelName: string;
+  /** Excerpt of the message; matched words are wrapped in SEARCH_MARK_START … SEARCH_MARK_END. */
   snippet: string;
 }
+
+/**
+ * Delimiters around matched words in `SearchResultDTO.snippet` (GET /api/search).
+ * Control characters, so they never collide with message text such as French « guillemets ».
+ */
+export const SEARCH_MARK_START = '\u0002';
+export const SEARCH_MARK_END = '\u0003';
 
 // ───────────────────────────── Runs ─────────────────────────────
 
@@ -301,6 +323,11 @@ export interface RoutineDTO {
   instruction: string;
   urgent: boolean;
   enabled: boolean;
+  /**
+   * Proposed by a bot (routine_propose) and not yet enabled by the owner. Optional until the server stores it:
+   * without it, the UI falls back to "disabled and never run".
+   */
+  proposed?: boolean;
   lastRunAt: ISODate | null;
   nextRuns: ISODate[];
   createdAt: ISODate;
@@ -397,6 +424,15 @@ export interface QuotaStatusDTO {
   /** True when no source can run work right now. */
   allPaused: boolean;
   pausedReason: string | null;
+  /**
+   * Liveness of the worker service, which runs the bots (heartbeat written about every 30 s).
+   * Optional: a server that does not report it leaves the UI silent about the worker.
+   */
+  worker?: {
+    lastSeenAt: ISODate | null;
+    /** False when no heartbeat came for about 2 minutes (judged with the server's clock). */
+    alive: boolean;
+  };
 }
 
 export interface UsageRowDTO {
@@ -460,7 +496,18 @@ export interface PushPublicKeyDTO {
 export type ServerEvent =
   | { type: 'message.created'; message: MessageDTO }
   | { type: 'message.updated'; message: MessageDTO }
-  | { type: 'message.delta'; messageId: string; channelId: string; delta: string }
+  | {
+      type: 'message.delta';
+      messageId: string;
+      channelId: string;
+      delta: string;
+      /**
+       * Length of the message text before this chunk (UTF-16 units, like `String.length`). Lets the UI apply chunks
+       * idempotently and notice a gap (e.g. text fetched from the database before the latest chunks were saved).
+       * Optional for compatibility: without it, chunks are appended.
+       */
+      offset?: number;
+    }
   | { type: 'run.updated'; run: RunDTO }
   | { type: 'bot.updated'; botId: string }
   | { type: 'channel.updated'; channelId: string }

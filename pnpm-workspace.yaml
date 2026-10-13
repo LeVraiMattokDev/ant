@@ -5,3 +5,8 @@ onlyBuiltDependencies:
   - esbuild
   - node-pty
   - "@node-rs/argon2"
+# Seulement les binaires natifs de la libc de la machine qui installe (glibc dans les images
+# node:22-bookworm-slim) : sans cela, pnpm deploy embarque aussi la variante musl du binaire
+# Claude Code de l'Agent SDK (~240 Mo inutiles dans l'image serveur).
+supportedArchitectures:
+  libc: [current]

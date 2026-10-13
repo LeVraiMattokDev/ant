@@ -13,8 +13,11 @@ import { RoutineEditor, type RoutineFields } from '../components/routines/Routin
 import { Badge, EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner, Toggle, cx } from '../components/ui';
 import { BotAvatar } from '../components/BotAvatar';
 
-/** Bots propose routines disabled; one that never ran and is disabled is treated as a proposal. */
-const isProposal = (r: RoutineDTO) => !r.enabled && !r.lastRunAt;
+/**
+ * A bot's proposal waiting for the owner. The server flags it (`proposed`); an older server does not, and then
+ * a disabled routine that never ran is the closest guess.
+ */
+export const isProposal = (r: RoutineDTO) => !r.enabled && (r.proposed ?? !r.lastRunAt);
 
 function useRoutineMutations() {
   const qc = useQueryClient();
@@ -189,6 +192,21 @@ export function RoutinesPage() {
   });
   const [editing, setEditing] = useState<RoutineDTO | null>(null);
   const focusId = params.get('id');
+  // A routine is carried out by a bot: without one, the page explains it and links to the bot creation.
+  const noBots = bots.data?.length === 0;
+  const showForm = creating && !!bots.data?.length;
+  const createAction = (label: string) =>
+    noBots ? (
+      <Link to="/bots/new" className="btn btn-primary">
+        <Plus className="size-4" />
+        Créer d’abord un bot
+      </Link>
+    ) : (
+      <button type="button" className="btn btn-primary" onClick={() => setCreating(true)} disabled={!bots.data}>
+        <Plus className="size-4" />
+        {label}
+      </button>
+    );
 
   // Deep links: "?new=1&bot=…&channel=…" opens the creation form prefilled; "?id=…" scrolls to a routine.
   useEffect(() => {
@@ -224,18 +242,11 @@ export function RoutinesPage() {
       <PageHeader
         title="Routines"
         description="Des tâches planifiées, décrites en langage naturel."
-        actions={
-          !creating && (
-            <button type="button" className="btn btn-primary" onClick={() => setCreating(true)} disabled={!bots.data?.length}>
-              <Plus className="size-4" />
-              Nouvelle routine
-            </button>
-          )
-        }
+        actions={!showForm && createAction('Nouvelle routine')}
       />
       <div className="scroll-y flex-1 px-4 pb-6 md:px-8">
         <div className="max-w-3xl space-y-4">
-          {creating && bots.data && (
+          {showForm && bots.data && (
             <NewRoutine
               key={`${prefill.botId ?? ''}:${prefill.channelId ?? ''}`}
               bots={bots.data}
@@ -250,15 +261,9 @@ export function RoutinesPage() {
           ) : routines.isError ? (
             <ErrorBlock error={routines.error} onRetry={() => void routines.refetch()} />
           ) : sorted.length === 0 ? (
-            !creating && (
-              <EmptyState
-                title="Aucune routine"
-                action={
-                  <button type="button" className="btn btn-primary" onClick={() => setCreating(true)} disabled={!bots.data?.length}>
-                    Créer une routine
-                  </button>
-                }
-              >
+            !showForm && (
+              <EmptyState title="Aucune routine" action={createAction('Créer une routine')}>
+                {noBots && 'Une routine est confiée à un bot : crée d’abord un bot, puis reviens ici. '}
                 Exemple : « chaque lundi à 8h, fais-moi un point sur mes projets ». Les bots peuvent aussi en proposer.
               </EmptyState>
             )

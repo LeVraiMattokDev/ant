@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, lt, sql as dsql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, lt, notInArray, sql as dsql, type SQL } from 'drizzle-orm';
 import type { AuthorKind, MessageDTO, MessageMeta, MessageStatus, SearchResultDTO } from '@ant/shared';
 import { channels, messages } from '../db/schema';
 import { messageToDTO } from '../lib/dto';
@@ -86,11 +86,24 @@ export async function getMessageDTO(ctx: Ctx, id: string): Promise<MessageDTO | 
   return messageToDTO(row, stats?.count ?? 0, stats?.last ? new Date(stats.last) : null);
 }
 
-/** Top-level messages of a channel, newest last, with reply counts. */
-export async function listChannelMessages(ctx: Ctx, channelId: string, opts: { before?: Date; limit?: number } = {}): Promise<MessageDTO[]> {
+/**
+ * Top-level messages of a channel, newest last, with reply counts.
+ * Paging: `beforeId` (the oldest message already shown) is a keyset cursor on (created_at, id), compared at full
+ * precision in SQL; a millisecond ISO `before` would skip messages written within the same millisecond.
+ */
+export async function listChannelMessages(
+  ctx: Ctx,
+  channelId: string,
+  opts: { before?: Date; beforeId?: string; limit?: number } = {},
+): Promise<MessageDTO[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const conditions = [eq(messages.channelId, channelId), isNull(messages.threadRootId)];
-  if (opts.before) conditions.push(lt(messages.createdAt, opts.before));
+  if (opts.beforeId) {
+    // Explicitly qualified: an interpolated column would bind to the inner alias. An unknown id gives an empty page.
+    conditions.push(dsql`("messages"."created_at", "messages"."id") < (select c.created_at, c.id from messages c where c.id = ${opts.beforeId})`);
+  } else if (opts.before) {
+    conditions.push(lt(messages.createdAt, opts.before));
+  }
   const rows = await ctx.db
     .select({
       m: messages,
@@ -100,7 +113,7 @@ export async function listChannelMessages(ctx: Ctx, channelId: string, opts: { b
     })
     .from(messages)
     .where(and(...conditions))
-    .orderBy(desc(messages.createdAt))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(limit);
   return rows.reverse().map((r) => messageToDTO(r.m, r.replyCount, r.lastReplyAt ? new Date(r.lastReplyAt) : null));
 }
@@ -140,29 +153,181 @@ export interface SearchFilters {
   from?: Date;
   to?: Date;
   limit?: number;
+  /**
+   * 'all' (the search page): every term is required. 'broad' (default, the bots' search_messages tool): when fewer
+   * than `limit` messages contain every term, messages containing any of them complete the list, ranked after.
+   */
+  match?: 'all' | 'broad';
+  /** Delimiters around matched words in the snippet. Default '**' (markdown bold, readable by the bots). */
+  marks?: { start: string; end: string };
+}
+
+/** Sentinels for ts_headline: control characters never found in the text (unlike « », which French uses). */
+const HL_START = '\u0002';
+const HL_END = '\u0003';
+const HEADLINE_OPTS = `StartSel=${HL_START}, StopSel=${HL_END}, MaxWords=30, MinWords=10`;
+/**
+ * Characters ts_headline must not interpret, each replaced by NEUTRAL (one for one, so offsets are kept): '<' starts
+ * what its parser takes for an XML tag (`Promise<void>`, `<div>`, « » unaccented to << >>), which the excerpt drops;
+ * the sentinels, found in a message, would fake highlights.
+ */
+const NEUTRAL = '\u0001';
+const NEUTRALIZED = `<${HL_START}${HL_END}`;
+const NEUTRALIZED_RE = /[<\u0002\u0003]/g;
+
+/** Positive and excluded terms of a websearch-style query ("exact phrase", -exclusion, or). */
+export function splitWebsearch(query: string): { positive: string; negative: string } {
+  const positive: string[] = [];
+  const negative: string[] = [];
+  for (const m of query.matchAll(/(^|\s)(-?)(?:"([^"]*)"?|(\S+))/g)) {
+    const text = (m[3] ?? m[4] ?? '').trim();
+    if (!text) continue;
+    if (m[2] === '-') negative.push(text);
+    else if (!/^or$/i.test(text)) positive.push(text);
+  }
+  return { positive: positive.join(' '), negative: negative.join(' ') };
+}
+
+/** OR of the French lexemes of `text`, as a tsquery (empty when it has no lexeme). Lexemes are quoted for tsquery input. */
+function anyLexeme(text: string): SQL {
+  // Backslashes and quotes doubled (SQL source below: '\' and '\\', standard_conforming_strings).
+  return dsql`(select coalesce(string_agg(x.q, ' | '), '')::tsquery
+    from (select '''' || replace(replace(l, '\\', '\\\\'), '''', '''''') || '''' as q
+          from unnest(tsvector_to_array(to_tsvector('french', ant_unaccent(${text})))) as l) as x)`;
+}
+
+/** Every term required (websearch syntax), accents ignored. */
+export function allTermsQuery(query: string): SQL {
+  return dsql`websearch_to_tsquery('french', ant_unaccent(${query}))`;
+}
+
+/**
+ * Any of the terms (each word's lexeme OR-ed), exclusions kept: finds « Projet Kozmo : lancement prévu en
+ * janvier 2027 » for « Kozmo date de sortie ». Null when the query has no positive term.
+ */
+export function anyTermQuery(query: string): SQL | null {
+  const { positive, negative } = splitWebsearch(query);
+  if (!positive) return null;
+  return negative ? dsql`(${anyLexeme(positive)} && !!${anyLexeme(negative)})` : anyLexeme(positive);
+}
+
+// ── Snippets: ts_headline runs on the unaccented text (so « reunion » highlights « Réunion »), then the excerpt
+// and its highlights are mapped back onto the original text, so accents, apostrophes and tag-like text are kept.
+
+const unaccented = new Map<string, string>();
+
+async function loadUnaccent(ctx: Ctx, texts: string[]): Promise<void> {
+  const missing = new Set<string>();
+  for (const t of texts) for (const ch of t) if (ch.charCodeAt(0) > 127 && !unaccented.has(ch)) missing.add(ch);
+  if (missing.size === 0) return;
+  if (unaccented.size > 20_000) unaccented.clear();
+  const rows = await ctx.sql<{ c: string; u: string }[]>`select c, ant_unaccent(c) as u from unnest(${ctx.sql.array([...missing])}::text[]) as c`;
+  for (const r of rows) unaccented.set(r.c, r.u);
+}
+
+/**
+ * Removes emphasis markers left unpaired because the excerpt cut their span (the UI's stripMarkdown only drops pairs).
+ * Runs before the highlight marks are inserted: the bots' default marks are '**' too.
+ */
+function dropUnpairedEmphasis(snippet: string, before: string, after: string): string {
+  let out = snippet;
+  for (const marker of ['**', '__', '~~']) {
+    const count = (t: string) => t.split(marker).length - 1;
+    if (count(before) % 2 === 1) {
+      const i = out.indexOf(marker);
+      if (i >= 0) out = out.slice(0, i) + out.slice(i + marker.length);
+    }
+    if (count(after) % 2 === 1) {
+      const i = out.lastIndexOf(marker);
+      if (i >= 0) out = out.slice(0, i) + out.slice(i + marker.length);
+    }
+  }
+  return out;
+}
+
+/** Maps a headline computed on the neutralized ant_unaccent(content) back onto `content`, with `marks` around the matches. */
+function buildSnippet(content: string, headline: string, marks: { start: string; end: string }): string {
+  const withMarks = (text: string) => text.split(HL_START).join(marks.start).split(HL_END).join(marks.end);
+  // Unaccented, neutralized copy (as given to ts_headline), remembering which original character produced each of its characters.
+  let u = '';
+  const from: number[] = [];
+  const to: number[] = [];
+  let i = 0;
+  for (const ch of content) {
+    const rep = (ch.charCodeAt(0) > 127 ? (unaccented.get(ch) ?? ch) : ch).replace(NEUTRALIZED_RE, NEUTRAL);
+    for (let k = 0; k < rep.length; k++) {
+      from.push(i);
+      to.push(i + ch.length);
+    }
+    u += rep;
+    i += ch.length;
+  }
+  let plain = '';
+  const ranges: [number, number][] = [];
+  let open = -1;
+  for (const ch of headline) {
+    if (ch === HL_START) open = plain.length;
+    else if (ch === HL_END) {
+      if (open >= 0 && plain.length > open) ranges.push([open, plain.length]);
+      open = -1;
+    } else plain += ch;
+  }
+  const at = plain ? u.indexOf(plain) : -1;
+  if (at < 0) {
+    // Not found (an unusual unaccent rule): keep the unaccented excerpt rather than lose the highlights.
+    return withMarks(headline.split(NEUTRAL).join('<'));
+  }
+  const startOf = (k: number) => (k < from.length ? from[k]! : content.length);
+  const endOf = (k: number) => (k <= 0 ? 0 : to[k - 1]!);
+  // Sentinels found in the message itself must not read as highlights once replaced by the marks.
+  const slice = (a: number, b: number) => content.slice(a, b).replace(/[\u0002\u0003]/g, ' ');
+  const s = startOf(at);
+  const e = endOf(at + plain.length);
+  let out = '';
+  let cursor = s;
+  for (const [a, b] of ranges) {
+    const ra = startOf(at + a);
+    const rb = endOf(at + b);
+    if (ra < cursor || rb <= ra) continue;
+    out += slice(cursor, ra) + HL_START + slice(ra, rb) + HL_END;
+    cursor = rb;
+  }
+  out += slice(cursor, e);
+  return withMarks(dropUnpairedEmphasis(out, content.slice(0, s), content.slice(e)));
 }
 
 export async function searchMessages(ctx: Ctx, q: string, filters: SearchFilters = {}): Promise<SearchResultDTO[]> {
   const query = q.trim();
   if (!query) return [];
-  const limit = Math.min(filters.limit ?? 30, 100);
-  const tsq = dsql`websearch_to_tsquery('french', ant_unaccent(${query}))`;
-  const conditions = [dsql`${messages.searchVector} @@ ${tsq}`];
-  if (filters.channelId) conditions.push(eq(messages.channelId, filters.channelId));
-  if (filters.botId) conditions.push(eq(messages.botId, filters.botId));
-  if (filters.from) conditions.push(dsql`${messages.createdAt} >= ${filters.from}`);
-  if (filters.to) conditions.push(dsql`${messages.createdAt} <= ${filters.to}`);
-  const rows = await ctx.db
-    .select({
-      m: messages,
-      channelName: channels.name,
-      snippet: dsql<string>`ts_headline('french', ${messages.content}, ${tsq}, 'StartSel=«, StopSel=», MaxWords=30, MinWords=10')`,
-      rank: dsql<number>`ts_rank(${messages.searchVector}, ${tsq})`,
-    })
-    .from(messages)
-    .innerJoin(channels, eq(channels.id, messages.channelId))
-    .where(and(...conditions))
-    .orderBy(dsql`ts_rank(${messages.searchVector}, ${tsq}) desc`, desc(messages.createdAt))
-    .limit(limit);
-  return rows.map((r) => ({ message: messageToDTO(r.m), channelName: r.channelName, snippet: r.snippet }));
+  const limit = Math.min(Math.max(filters.limit ?? 30, 1), 100);
+  const marks = filters.marks ?? { start: '**', end: '**' };
+  const scope: SQL[] = [];
+  if (filters.channelId) scope.push(eq(messages.channelId, filters.channelId));
+  if (filters.botId) scope.push(eq(messages.botId, filters.botId));
+  if (filters.from) scope.push(dsql`${messages.createdAt} >= ${filters.from}`);
+  if (filters.to) scope.push(dsql`${messages.createdAt} <= ${filters.to}`);
+
+  const find = (tsq: SQL, extra: SQL[], max: number) =>
+    ctx.db
+      .select({
+        m: messages,
+        channelName: channels.name,
+        headline: dsql<string>`ts_headline('french', translate(ant_unaccent(${messages.content}), ${NEUTRALIZED}, ${NEUTRAL.repeat(NEUTRALIZED.length)}), ${tsq}, ${HEADLINE_OPTS})`,
+      })
+      .from(messages)
+      .innerJoin(channels, eq(channels.id, messages.channelId))
+      .where(and(dsql`${messages.searchVector} @@ ${tsq}`, ...scope, ...extra))
+      .orderBy(dsql`ts_rank_cd(${messages.searchVector}, ${tsq}) desc`, desc(messages.createdAt))
+      .limit(max);
+
+  const rows = await find(allTermsQuery(query), [], limit);
+  if ((filters.match ?? 'broad') === 'broad' && rows.length < limit) {
+    const any = anyTermQuery(query);
+    if (any) {
+      const seen = rows.map((r) => r.m.id);
+      rows.push(...(await find(any, seen.length ? [notInArray(messages.id, seen)] : [], limit - rows.length)));
+    }
+  }
+  await loadUnaccent(ctx, rows.map((r) => r.m.content));
+  return rows.map((r) => ({ message: messageToDTO(r.m), channelName: r.channelName, snippet: buildSnippet(r.m.content, r.headline, marks) }));
 }

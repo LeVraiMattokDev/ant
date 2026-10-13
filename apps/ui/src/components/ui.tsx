@@ -159,11 +159,10 @@ export function Gauge({
   const warn = marks.length ? value !== null && value >= (marks[0]?.at ?? Infinity) : pct >= 70;
   return (
     <div
-      role="meter"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={max}
-      aria-valuenow={value ?? undefined}
+      // A meter requires a current value: without one (subscription not configured, no data yet) it is an image saying so.
+      {...(value === null
+        ? { role: 'img', 'aria-label': `${label} : non disponible` }
+        : { role: 'meter', 'aria-label': label, 'aria-valuemin': 0, 'aria-valuemax': max, 'aria-valuenow': value })}
       className="relative h-2 w-full overflow-hidden rounded-full bg-active"
     >
       <div

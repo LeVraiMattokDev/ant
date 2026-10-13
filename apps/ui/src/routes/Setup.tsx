@@ -3,7 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Copy, KeyRound } from 'lucide-react';
 import type { RecoveryCodesResponse, SetupStartResponse } from '@ant/shared';
-import { errorMessage, post } from '../lib/api';
+import { ApiError, errorMessage, post } from '../lib/api';
 import { qk, useAuthState } from '../lib/queries';
 import { MIN_PASSWORD_LENGTH, passwordStrength } from '../lib/password';
 import { defaultPasskeyName, passkeysSupported, registerPasskey } from '../lib/passkey';
@@ -145,8 +145,24 @@ export function SetupPage() {
       setCodes(res.recoveryCodes);
       setStep('codes');
     } catch (err) {
-      setError(errorMessage(err));
       setCode('');
+      if (err instanceof ApiError && err.status === 401) {
+        // The enrolment session (10 minutes) has expired: this secret can no longer be confirmed. The setup
+        // token stays valid until the end of the setup, so starting over issues a new secret.
+        try {
+          sessionStorage.removeItem(STORAGE_KEY);
+        } catch {
+          /* ignore */
+        }
+        setTotp(null);
+        setStep('credentials');
+        setError(
+          'Étape expirée (10 minutes) : recommence avec le jeton d’initialisation et ton mot de passe. Supprime l’entrée « Ant » ajoutée dans ton application, un nouveau QR code va être généré.',
+        );
+        void qc.invalidateQueries({ queryKey: qk.authState });
+        return;
+      }
+      setError(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -173,7 +189,7 @@ export function SetupPage() {
   const titles: Record<Step, { title: string; subtitle: string }> = {
     credentials: {
       title: 'Initialisation',
-      subtitle: 'Premier lancement : saisis le jeton d’initialisation affiché dans les journaux du conteneur, puis choisis ton mot de passe.',
+      subtitle: 'Premier lancement : saisis le jeton d’initialisation (valeur de SETUP_TOKEN dans ton fichier .env), puis choisis ton mot de passe.',
     },
     totp: {
       title: 'Application d’authentification',
@@ -217,7 +233,9 @@ export function SetupPage() {
                 onChange={(e) => setToken(e.target.value)}
               />
               <div className="help">
-                Visible avec <span className="mono">docker compose logs web</span>. Il ne sert qu’une fois.
+                C’est la valeur de <span className="mono">SETUP_TOKEN</span> dans <span className="mono">.env</span> (
+                <span className="mono">grep SETUP_TOKEN .env</span>). Si elle est vide, Ant en génère un, visible avec{' '}
+                <span className="mono">docker compose logs web</span>. Il ne sert qu’une fois.
               </div>
             </div>
             <div>

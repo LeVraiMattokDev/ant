@@ -32,7 +32,10 @@ export async function runDigest(deps: WorkerDeps, now = new Date()): Promise<str
     .from(runs)
     .where(gte(runs.createdAt, since))
     .groupBy(runs.botId, runs.status, runs.trigger);
-  const pending = await ctx.db.select().from(approvals).where(eq(approvals.status, 'pending'));
+  const pending = await ctx.db
+    .select({ title: approvals.title, botId: approvals.botId, summary: approvals.summary })
+    .from(approvals)
+    .where(eq(approvals.status, 'pending'));
   const deferred = await ctx.db.select().from(nudges).where(and(gte(nudges.createdAt, since), inArray(nudges.status, ['deferred', 'delivered'])));
   const done = await ctx.db.select().from(tasks).where(and(eq(tasks.status, 'done'), gte(tasks.updatedAt, since)));
   const overdue = await ctx.db.select().from(tasks).where(and(inArray(tasks.status, ['open', 'waiting']), lt(tasks.dueAt, now)));

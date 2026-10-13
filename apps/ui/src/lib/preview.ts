@@ -62,11 +62,13 @@ function phrase(activity: string): string {
 /**
  * Live state of a bot for the list, or null when idle: waiting for an approval, queued,
  * or working (its activity, else "écrit…" while a run is active in its conversation).
+ * `workerDown` (see useWorkerDown) says why queued work does not start.
  */
 export function botLiveState(
   bot: Pick<BotDTO, 'id' | 'activity' | 'paused'>,
   runs: Pick<RunDTO, 'botId' | 'channelId' | 'status' | 'activity'>[] | undefined,
   channelId?: string,
+  workerDown = false,
 ): { label: string; tone: 'working' | 'waiting' } | null {
   const mine = (runs ?? []).filter((r) => r.botId === bot.id);
   if (mine.some((r) => r.status === 'waiting_approval')) return { label: 'attend ta validation', tone: 'waiting' };
@@ -78,7 +80,7 @@ export function botLiveState(
     return { label: bot.activity ? phrase(bot.activity) : 'au travail', tone: 'working' };
   }
   if (bot.activity) return { label: phrase(bot.activity), tone: 'working' };
-  if (mine.some((r) => r.status === 'queued')) return { label: 'en file d’attente', tone: 'waiting' };
+  if (mine.some((r) => r.status === 'queued')) return { label: workerDown ? 'attend le worker' : 'en file d’attente', tone: 'waiting' };
   return null;
 }
 

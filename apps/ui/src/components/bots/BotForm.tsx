@@ -8,6 +8,7 @@ import {
   MODEL_LABELS,
   SELECTABLE_MODELS,
   SLUG_RE,
+  isValidHHMM,
   slugify,
   type BotDTO,
   type BotInput,
@@ -17,6 +18,13 @@ import {
 import { PERMISSION_KEYS, PERMISSION_LABELS } from '../../lib/labels';
 import { Field, Spinner, Toggle, cx } from '../ui';
 import { BotAvatar } from '../BotAvatar';
+
+const DEFAULT_HEARTBEAT_MIN = 180;
+/** Same bounds as the server (services/bots.ts): between 15 minutes and 7 days. */
+const MIN_HEARTBEAT_MIN = 15;
+const MAX_HEARTBEAT_MIN = 7 * 24 * 60;
+
+const isValidInterval = (min: number) => Number.isInteger(min) && min >= MIN_HEARTBEAT_MIN && min <= MAX_HEARTBEAT_MIN;
 
 const HEARTBEAT_PRESETS = [
   { min: 60, label: '1 h' },
@@ -38,6 +46,8 @@ interface FormState {
   permissions: BotPermissions;
   heartbeatEnabled: boolean;
   heartbeatIntervalMin: number;
+  /** Interval stored for this bot (default for a new one): what is saved when the hidden field was left invalid. */
+  savedIntervalMin: number;
   quietOverride: boolean;
   quietStart: string;
   quietEnd: string;
@@ -57,7 +67,8 @@ function initialState(bot: BotDTO | undefined): FormState {
     effort: bot?.effort ?? DEFAULT_BOT_EFFORT,
     permissions: { ...DEFAULT_BOT_PERMISSIONS, ...bot?.permissions },
     heartbeatEnabled: bot?.heartbeatEnabled ?? true,
-    heartbeatIntervalMin: bot?.heartbeatIntervalMin ?? 180,
+    heartbeatIntervalMin: bot?.heartbeatIntervalMin ?? DEFAULT_HEARTBEAT_MIN,
+    savedIntervalMin: bot?.heartbeatIntervalMin ?? DEFAULT_HEARTBEAT_MIN,
     quietOverride: !!bot?.quietHours,
     quietStart: bot?.quietHours?.start ?? '22:00',
     quietEnd: bot?.quietHours?.end ?? '07:30',
@@ -78,7 +89,12 @@ export function toBotInput(s: FormState): BotInput {
     effort: s.effort,
     permissions: s.permissions,
     heartbeatEnabled: s.heartbeatEnabled,
-    heartbeatIntervalMin: s.heartbeatIntervalMin,
+    // Only checked while the heartbeat is on: a value left invalid in the hidden field keeps the stored interval.
+    heartbeatIntervalMin: isValidInterval(s.heartbeatIntervalMin)
+      ? s.heartbeatIntervalMin
+      : isValidInterval(s.savedIntervalMin)
+        ? s.savedIntervalMin
+        : DEFAULT_HEARTBEAT_MIN,
     quietHours: s.quietOverride ? { start: s.quietStart, end: s.quietEnd } : null,
     apiDailyCapUsd: cap !== null && Number.isFinite(cap) ? cap : null,
     paused: s.paused,
@@ -107,17 +123,35 @@ export function BotForm({
   error: string | null;
 }) {
   const [s, setS] = useState<FormState>(() => initialState(bot));
+  /** Set by a submit attempt: required fields left empty are then flagged too, not only malformed ones. */
+  const [showErrors, setShowErrors] = useState(false);
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setS((prev) => ({ ...prev, [k]: v }));
 
   const slugValid = SLUG_RE.test(s.slug);
   const capValue = s.apiDailyCap.trim() === '' ? null : Number(s.apiDailyCap.replace(',', '.'));
   const capValid = capValue === null || (Number.isFinite(capValue) && capValue >= 0);
-  const intervalValid = Number.isInteger(s.heartbeatIntervalMin) && s.heartbeatIntervalMin >= 15;
-  const valid = s.name.trim() && s.role.trim() && slugValid && capValid && intervalValid;
+  // A hidden field (heartbeat or own quiet hours turned off) never blocks the form.
+  const intervalValid = !s.heartbeatEnabled || isValidInterval(s.heartbeatIntervalMin);
+  const quietValid = !s.quietOverride || (isValidHHMM(s.quietStart) && isValidHHMM(s.quietEnd));
+
+  // In page order: the first one gets the focus.
+  const invalid = [
+    { ok: !!s.name.trim(), id: 'bot-name', label: 'nom' },
+    { ok: slugValid, id: 'bot-slug', label: 'identifiant' },
+    { ok: !!s.role.trim(), id: 'bot-role', label: 'rôle' },
+    { ok: intervalValid, id: 'bot-interval', label: 'intervalle du heartbeat' },
+    { ok: quietValid, id: isValidHHMM(s.quietStart) ? 'bot-quiet-end' : 'bot-quiet-start', label: 'heures de silence' },
+    { ok: capValid, id: 'bot-cap', label: 'plafond API' },
+  ].filter((f) => !f.ok);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (valid) onSubmit(toBotInput(s));
+    if (invalid.length > 0) {
+      setShowErrors(true);
+      document.getElementById(invalid[0]!.id)?.focus();
+      return;
+    }
+    onSubmit(toBotInput(s));
   };
 
   const modelOptions = SELECTABLE_MODELS.includes(s.model as (typeof SELECTABLE_MODELS)[number])
@@ -125,7 +159,7 @@ export function BotForm({
     : [...SELECTABLE_MODELS, s.model];
 
   return (
-    <form onSubmit={submit} className="max-w-2xl" aria-label={bot ? `Modifier ${bot.name}` : 'Nouveau bot'}>
+    <form onSubmit={submit} noValidate className="max-w-2xl" aria-label={bot ? `Modifier ${bot.name}` : 'Nouveau bot'}>
       <Section title="Identité">
         <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
           <Field label="Avatar" htmlFor="bot-avatar" help="🐜 : avatar généré. Sinon, un emoji.">
@@ -140,7 +174,7 @@ export function BotForm({
               />
             </div>
           </Field>
-          <Field label="Nom" htmlFor="bot-name">
+          <Field label="Nom" htmlFor="bot-name" error={showErrors && !s.name.trim() ? 'Donne un nom au bot.' : null}>
             <input
               id="bot-name"
               className="input"
@@ -157,7 +191,7 @@ export function BotForm({
         <Field
           label="Identifiant (@mention)"
           htmlFor="bot-slug"
-          error={s.slug && !slugValid ? 'Lettres minuscules, chiffres et tirets uniquement (2 à 40 caractères).' : null}
+          error={(s.slug || showErrors) && !slugValid ? 'Lettres minuscules, chiffres et tirets uniquement (2 à 40 caractères).' : null}
           help="Utilisé pour mentionner le bot : @dev, @recherche…"
         >
           <div className="flex items-center">
@@ -172,7 +206,12 @@ export function BotForm({
             />
           </div>
         </Field>
-        <Field label="Rôle" htmlFor="bot-role" help="Une phrase visible des autres bots, qui dit ce que fait celui-ci.">
+        <Field
+          label="Rôle"
+          htmlFor="bot-role"
+          error={showErrors && !s.role.trim() ? 'Décris en une phrase ce que fait ce bot.' : null}
+          help="Une phrase visible des autres bots, qui dit ce que fait celui-ci."
+        >
           <input id="bot-role" className="input" required maxLength={200} value={s.role} onChange={(e) => set('role', e.target.value)} />
         </Field>
         <Field label="Instructions" htmlFor="bot-instructions" help="Comment il travaille, ce qu’il doit éviter, son ton. Markdown accepté.">
@@ -242,8 +281,10 @@ export function BotForm({
               <label className="ml-2 flex items-center gap-1.5 text-[13px] text-muted">
                 ou
                 <input
+                  id="bot-interval"
                   type="number"
-                  min={15}
+                  min={MIN_HEARTBEAT_MIN}
+                  max={MAX_HEARTBEAT_MIN}
                   step={5}
                   className="input w-24"
                   aria-label="Intervalle en minutes"
@@ -253,7 +294,7 @@ export function BotForm({
                 min
               </label>
             </div>
-            {!intervalValid && <div className="help !text-danger">Au moins 15 minutes.</div>}
+            {!intervalValid && <div className="help !text-danger">Entre {MIN_HEARTBEAT_MIN} minutes et 7 jours.</div>}
           </div>
         )}
         <div>
@@ -271,11 +312,26 @@ export function BotForm({
           {s.quietOverride && (
             <div className="mt-2 flex items-center gap-2 text-[13px]">
               de
-              <input type="time" className="input w-28" aria-label="Début du silence" value={s.quietStart} onChange={(e) => set('quietStart', e.target.value)} />
+              <input
+                id="bot-quiet-start"
+                type="time"
+                className="input w-32"
+                aria-label="Début du silence"
+                value={s.quietStart}
+                onChange={(e) => set('quietStart', e.target.value)}
+              />
               à
-              <input type="time" className="input w-28" aria-label="Fin du silence" value={s.quietEnd} onChange={(e) => set('quietEnd', e.target.value)} />
+              <input
+                id="bot-quiet-end"
+                type="time"
+                className="input w-32"
+                aria-label="Fin du silence"
+                value={s.quietEnd}
+                onChange={(e) => set('quietEnd', e.target.value)}
+              />
             </div>
           )}
+          {!quietValid && <div className="help !text-danger">Indique une heure de début et une heure de fin.</div>}
         </div>
       </Section>
 
@@ -308,11 +364,17 @@ export function BotForm({
           {error}
         </div>
       )}
-      <div className="sticky bottom-0 -mx-4 flex gap-2 border-t border-line bg-bg px-4 py-3 md:-mx-8 md:px-8">
-        <button type="submit" className="btn btn-primary" disabled={!valid || saving}>
+      <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line bg-bg px-4 py-3 md:-mx-8 md:px-8">
+        {/* Never disabled for a missing field: a click says which one and moves the focus there. */}
+        <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving && <Spinner className="size-4 text-accent-fg" />}
           {bot ? 'Enregistrer' : 'Créer le bot'}
         </button>
+        {showErrors && invalid.length > 0 && (
+          <span role="alert" className="text-[13px] text-danger">
+            À corriger : {invalid.map((f) => f.label).join(', ')}.
+          </span>
+        )}
       </div>
     </form>
   );

@@ -10,6 +10,27 @@ import { clip, fail, guarded, ok, okWithImage } from './helpers';
 const OWNER_HAS_CONTROL =
   'Le propriétaire a pris la main sur l’ordinateur. N’utilise plus l’ordinateur pour l’instant : explique où tu en es et ce qu’il te reste à faire. Il te rendra la main.';
 
+/** French names of the keys an approval card may show (Playwright key names otherwise). */
+const KEY_NAMES: Record<string, string> = {
+  ' ': 'Espace',
+  Space: 'Espace',
+  Enter: 'Entrée',
+  Control: 'Ctrl',
+  Shift: 'Maj',
+  Meta: 'Cmd',
+  Backspace: 'Retour arrière',
+  Delete: 'Suppr',
+  Escape: 'Échap',
+};
+
+/** « la touche « Espace » », « le raccourci « Ctrl+Entrée » ». */
+export function describeKey(key: string): string {
+  // « Control++ » is Ctrl with the + key.
+  const parts = (key.endsWith('++') ? [...key.slice(0, -2).split('+'), '+'] : key.length > 1 ? key.split('+') : [key]).filter(Boolean);
+  const names = (parts.length ? parts : [key]).map((k) => KEY_NAMES[k] ?? k);
+  return names.length > 1 ? `le raccourci « ${names.join('+')} »` : `la touche « ${names[0]} »`;
+}
+
 export function computerTools(rc: RunContext) {
   const { ctx, computer } = rc.deps;
   const actor = botActor(rc.bot.slug);
@@ -131,7 +152,7 @@ export function computerTools(rc: RunContext) {
         `Pilote le navigateur Chromium de l’ordinateur (profil persistant, connexions conservées). Actions :
 - goto {url} : ouvre une page ; read : texte visible + éléments interactifs (refs e1, e2…) ; screenshot : capture d’écran
 - click {ref|selector} ; type {ref|selector, text} ; press {key} ; select {ref|selector, text} ; scroll {direction} ; back
-Sur les sites sensibles (paiement, messageries, réseaux sociaux, comptes), les clics et la touche Entrée sont soumis à la validation du propriétaire.`,
+Sur les sites sensibles (paiement, messageries, réseaux sociaux, comptes), les clics et toutes les touches autres que la navigation (Tab, flèches, Page haut/bas, Début/Fin, Échap) sont soumis à la validation du propriétaire.`,
         {
           action: z.enum(BROWSER_ACTIONS),
           url: z.string().optional(),
@@ -154,15 +175,18 @@ Sur les sites sensibles (paiement, messageries, réseaux sociaux, comptes), les 
               const state = await computer.browser({ action: 'screenshot', screenshot: false });
               const needs = browserActionNeedsApproval(args.action, state.url, rc.settings.sensitiveDomains, args.key);
               if (needs && !(await hasActiveGrant(rc, state.url))) {
-                const target = args.action === 'click' ? await computer.inspect({ ref: args.ref, selector: args.selector }) : null;
+                // A key sent to an element (Space on a button…) shows which one, like a click.
+                const targeted = args.action === 'click' || Boolean(args.ref || args.selector);
+                const target = targeted ? await computer.inspect({ ref: args.ref, selector: args.selector }) : null;
+                const label = target?.elementLabel ?? args.ref ?? args.selector ?? '?';
                 const what =
                   args.action === 'click'
-                    ? `Cliquer sur « ${target?.elementLabel ?? args.ref ?? args.selector ?? '?'} »`
-                    : `Appuyer sur ${args.key}`;
+                    ? `Cliquer sur « ${label} »`
+                    : `Appuyer sur ${describeKey(args.key ?? '')}${targeted ? ` dans « ${label} »` : ''}`;
                 const text = await requireApproval(rc, {
                   category: 'navigateur_sensible',
                   tool: 'browser',
-                  summary: `${what} sur ${state.url}\n\nPage : ${state.title}`,
+                  summary: `${what} — ${state.url}\n\nPage : ${state.title}`,
                   payload: { ...args, expectedUrl: state.url, expectedLabel: target?.elementLabel ?? null },
                   screenshotPng: target?.screenshotPng ?? null,
                 });

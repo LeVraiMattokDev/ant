@@ -3,25 +3,33 @@ import { mkdir } from 'node:fs/promises';
 import type { WorkerConfig } from '../config';
 import { createDatabase, runMigrations } from '../db/client';
 import { audit } from '../lib/audit';
-import { claimJob, completeJob, deferJob, failJob, recoverStaleJobs, type JobKind, type JobRow } from '../lib/jobs';
+import { claimJob, completeJob, deferJob, enqueue, failJob, recoverStaleJobs, type JobKind, type JobRow } from '../lib/jobs';
 import { logger } from '../lib/logger';
 import { getSettings } from '../lib/settings';
 import { ComputerClient } from '../services/computer-client';
 import { PushSender } from '../services/push';
 import { patchComputeState } from '../services/quota';
-import { CONTROL_CHANNEL } from '../services/runs';
+import { CONTROL_CHANNEL, failRun, sweepOrphanRuns } from '../services/runs';
 import { executeApproval } from './approvals-exec';
+import { releaseApiBudget } from './compute';
 import type { QueryFn, WorkerDeps } from './deps';
 import { runDigest } from './digest';
 import { runHeartbeat } from './heartbeat';
 import { RPC_CHANNEL, parseRoutine } from './routine-parse';
 import { rotateSession } from './rotate';
-import { executeRun } from './runner';
+import { SHUTDOWN_REASON, executeRun } from './runner';
 import { maintenance, schedulerTick } from './scheduler';
 
 const AGENT_KINDS: JobKind[] = ['bot.run'];
 const AUX_KINDS: JobKind[] = ['heartbeat', 'routine.parse', 'digest', 'approval.execute', 'session.rotate', 'maintenance'];
 const AUX_CONCURRENCY = 3;
+/** After asking in-flight runs to stop, how long they get to record their usage and requeue themselves. */
+const SHUTDOWN_DRAIN_MS = 12_000;
+
+/** Maintenance runs as a queued job keyed by the hour: at start-up, then once per clock hour, even across restarts. */
+function enqueueMaintenance(db: WorkerDeps['ctx']['db'], now = new Date()): Promise<string | null> {
+  return enqueue(db, 'maintenance', {}, { dedupeKey: `maint:${Math.floor(now.getTime() / 3600_000)}`, maxAttempts: 1 });
+}
 
 export interface WorkerHandle {
   stop(): Promise<void>;
@@ -53,6 +61,8 @@ export async function startWorker(cfg: WorkerConfig, opts: { query?: QueryFn; mi
   });
   const recovered = await recoverStaleJobs(ctx.db, new Date());
   if (recovered) logger.info({ recovered }, 'recovered jobs left running by a previous process');
+  const orphans = await sweepOrphanRuns(ctx);
+  if (orphans) logger.warn({ orphans }, 'closed runs that no job was executing any more');
   await audit(ctx.db, {
     actor: 'system',
     event: 'worker.start',
@@ -86,11 +96,12 @@ export async function startWorker(cfg: WorkerConfig, opts: { query?: QueryFn; mi
           try {
             const res = await executeRun(deps, runId, controller.signal);
             if (res.outcome === 'deferred') {
-              await deferJob(ctx.db, job.id, res.until, 'compute paused');
+              await deferJob(ctx.db, job.id, res.until, res.reason ?? 'compute paused');
               return;
             }
           } finally {
             controllers.delete(runId);
+            releaseApiBudget(runId);
           }
           break;
         }
@@ -104,7 +115,8 @@ export async function startWorker(cfg: WorkerConfig, opts: { query?: QueryFn; mi
           await executeApproval(deps, String(job.payload.approvalId));
           break;
         case 'session.rotate':
-          await rotateSession(deps, String(job.payload.sessionId));
+          // With the origin of the run that triggered it: after your own messages, hybrid mode may use the subscription.
+          await rotateSession(deps, String(job.payload.sessionId), job.payload.origin === 'user' ? 'user' : 'autonomous');
           break;
         case 'routine.parse': {
           const reply = await parseRoutine(deps, String(job.payload.requestId), String(job.payload.text));
@@ -124,6 +136,12 @@ export async function startWorker(cfg: WorkerConfig, opts: { query?: QueryFn; mi
       const outcome = await failJob(ctx.db, job, (err as Error).stack ?? String(err));
       if (job.kind === 'routine.parse' && outcome === 'failed') {
         await ctx.sql.notify(RPC_CHANNEL, JSON.stringify({ requestId: job.payload.requestId, ok: false, message: (err as Error).message }));
+      }
+      if (job.kind === 'bot.run' && outcome === 'failed') {
+        // Nothing will execute this run again: close it, or the bot shows « réfléchit » forever.
+        await failRun(ctx, String(job.payload.runId), (err as Error).message ?? String(err)).catch((e) =>
+          logger.error({ err: e, jobId: job.id }, 'could not record the failure of the run'),
+        );
       }
     }
   }
@@ -161,10 +179,12 @@ export async function startWorker(cfg: WorkerConfig, opts: { query?: QueryFn; mi
   const schedulerTimer = setInterval(() => {
     schedulerTick(deps).catch((err) => logger.error({ err }, 'scheduler failed'));
   }, 30_000);
-  const maintenanceTimer = setInterval(() => {
-    maintenance(deps).catch((err) => logger.error({ err }, 'maintenance failed'));
-  }, 3600_000);
+  const housekeepingTimer = setInterval(() => {
+    enqueueMaintenance(ctx.db).catch((err) => logger.error({ err }, 'maintenance scheduling failed'));
+    sweepOrphanRuns(ctx).catch((err) => logger.error({ err }, 'orphan run sweep failed'));
+  }, 5 * 60_000);
   schedulerTick(deps).catch((err) => logger.error({ err }, 'scheduler failed'));
+  await enqueueMaintenance(ctx.db);
   logger.info({ workerId: cfg.WORKER_ID }, 'worker started');
 
   return {
@@ -174,11 +194,13 @@ export async function startWorker(cfg: WorkerConfig, opts: { query?: QueryFn; mi
       clearInterval(pumpTimer);
       clearInterval(settingsTimer);
       clearInterval(schedulerTimer);
-      clearInterval(maintenanceTimer);
+      clearInterval(housekeepingTimer);
       const grace = new Promise((r) => setTimeout(r, 20_000));
       await Promise.race([Promise.allSettled([...inFlight]), grace]);
-      for (const c of controllers.values()) c.abort();
-      await Promise.race([Promise.allSettled([...inFlight]), new Promise((r) => setTimeout(r, 5_000))]);
+      // Not a cancellation: each run ends its turn, records its usage and goes back to the queue,
+      // to resume its SDK session at the next start (20 s + 12 s fit in the 40 s stop grace period).
+      for (const c of controllers.values()) c.abort(SHUTDOWN_REASON);
+      await Promise.race([Promise.allSettled([...inFlight]), new Promise((r) => setTimeout(r, SHUTDOWN_DRAIN_MS))]);
       await unlisten().catch(() => undefined);
       await database.close();
     },

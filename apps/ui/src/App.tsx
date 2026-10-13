@@ -1,10 +1,11 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import type { AuthStateDTO } from '@ant/shared';
 import { setUnauthorizedHandler } from './lib/api';
+import { ErrorBoundary } from './lib/error-boundary';
 import { qk, useAuthState } from './lib/queries';
 import { realtime } from './lib/ws';
-import { pushToast } from './lib/toast';
 import { AppShell } from './components/layout/AppShell';
 import { ConversationList } from './components/layout/ConversationList';
 import { DESKTOP_QUERY, useMediaQuery } from './lib/hooks';
@@ -48,12 +49,8 @@ function useRealtime(enabled: boolean): void {
   const qc = useQueryClient();
   useEffect(() => {
     if (!enabled) return;
-    realtime.start(qc, {
-      onNudge: (n) => {
-        const bot = qc.getQueryData<{ id: string; name: string }[]>(qk.bots)?.find((b) => b.id === n.botId);
-        pushToast({ level: 'info', title: `Relance${bot ? ` de ${bot.name}` : ''}`, body: n.title, url: '/accueil' });
-      },
-    });
+    // Nudges need no toast here: the server already sends one ('toast' event) that opens the bot's conversation.
+    realtime.start(qc);
     return () => realtime.stop();
   }, [enabled, qc]);
 }
@@ -65,8 +62,9 @@ function ProtectedApp() {
   useRealtime(ready);
 
   if (auth.isPending) return <Splash />;
-  if (auth.isError) return <ErrorBlock error={auth.error} onRetry={() => void auth.refetch()} />;
   const s = auth.data;
+  // A failed refetch keeps the last known state: the app stays up while the server restarts or a portal answers.
+  if (!s) return <ErrorBlock error={auth.error} onRetry={() => void auth.refetch()} />;
   if (s.setupRequired || s.enrolmentPending) return <Navigate to="/setup" replace />;
   if (!s.authenticated) {
     const next = `${location.pathname}${location.search}`;
@@ -75,26 +73,29 @@ function ProtectedApp() {
 
   return (
     <AppShell>
-      <Suspense fallback={<LoadingBlock />}>
-        <Routes>
-          <Route path="/" element={<HomeRoute />} />
-          <Route path="/accueil" element={<HomePage />} />
-          <Route path="/c/:channelId" element={<ConversationPage />} />
-          <Route path="/c/:channelId/t/:messageId" element={<ConversationPage />} />
-          <Route path="/bots" element={<BotsPage />} />
-          <Route path="/bots/new" element={<BotDetailPage />} />
-          <Route path="/bots/:botId" element={<BotDetailPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/computer" element={<ComputerPage />} />
-          <Route path="/routines" element={<RoutinesPage />} />
-          <Route path="/memory" element={<MemoryPage />} />
-          <Route path="/approvals" element={<ApprovalsPage />} />
-          <Route path="/quota" element={<QuotaPage />} />
-          <Route path="/audit" element={<AuditPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </Suspense>
+      {/* Reset on navigation so a screen that failed (e.g. a lazy chunk gone after a deployment) does not block the others. */}
+      <ErrorBoundary resetKey={location.pathname}>
+        <Suspense fallback={<LoadingBlock />}>
+          <Routes>
+            <Route path="/" element={<HomeRoute />} />
+            <Route path="/accueil" element={<HomePage />} />
+            <Route path="/c/:channelId" element={<ConversationPage />} />
+            <Route path="/c/:channelId/t/:messageId" element={<ConversationPage />} />
+            <Route path="/bots" element={<BotsPage />} />
+            <Route path="/bots/new" element={<BotDetailPage />} />
+            <Route path="/bots/:botId" element={<BotDetailPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/computer" element={<ComputerPage />} />
+            <Route path="/routines" element={<RoutinesPage />} />
+            <Route path="/memory" element={<MemoryPage />} />
+            <Route path="/approvals" element={<ApprovalsPage />} />
+            <Route path="/quota" element={<QuotaPage />} />
+            <Route path="/audit" element={<AuditPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
     </AppShell>
   );
 }
@@ -106,10 +107,13 @@ export function App() {
   useEffect(() => {
     setUnauthorizedHandler(() => {
       realtime.stop();
-      void qc.invalidateQueries({ queryKey: qk.authState });
-      if (!/^\/(login|setup)/.test(window.location.pathname)) navigate('/login', { replace: true });
+      // Drop the stale "authenticated" flag at once: ProtectedApp then sends the owner to /login?next=<current screen>,
+      // and the login page does not bounce back to '/' on the cached state while it is refetched.
+      qc.setQueryData<AuthStateDTO>(qk.authState, (s) => (s ? { ...s, authenticated: false } : s));
+      // A burst of 401s must not keep cancelling and restarting the same refetch.
+      void qc.invalidateQueries({ queryKey: qk.authState }, { cancelRefetch: false });
     });
-  }, [qc, navigate]);
+  }, [qc]);
 
   // Notification clicks handled by the service worker navigate inside the already-open app.
   useEffect(() => {

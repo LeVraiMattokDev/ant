@@ -138,7 +138,10 @@ export function nudgeToDTO(row: Row<typeof nudges>): NudgeDTO {
   };
 }
 
-export function approvalToDTO(row: Row<typeof approvals>): ApprovalDTO {
+/** A full approval row, or a list row that carries `hasScreenshot` instead of the (heavy) base64 capture. */
+export type ApprovalRowLike = Omit<Row<typeof approvals>, 'screenshotPng'> & ({ screenshotPng: string | null } | { hasScreenshot: boolean });
+
+export function approvalToDTO(row: ApprovalRowLike): ApprovalDTO {
   return {
     id: row.id,
     runId: row.runId ?? null,
@@ -149,7 +152,7 @@ export function approvalToDTO(row: Row<typeof approvals>): ApprovalDTO {
     title: row.title,
     summary: row.summary,
     payload: row.payload,
-    hasScreenshot: Boolean(row.screenshotPng),
+    hasScreenshot: 'hasScreenshot' in row ? row.hasScreenshot : Boolean(row.screenshotPng),
     urgent: row.urgent,
     status: row.status,
     comment: row.comment ?? null,

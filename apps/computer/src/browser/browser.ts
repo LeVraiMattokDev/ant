@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import type { BrowserRequest, BrowserResponse, BrowserTargetInfo } from '@ant/shared';
 import { chromium, type BrowserContext, type Locator, type Page } from 'playwright';
@@ -7,9 +8,13 @@ import {
   clearMarkScript,
   describeElements,
   INSPECT_MARK_ATTR,
+  isPin,
   nameOf,
   outlineMarkedScript,
   pageText,
+  PIN_ATTR,
+  PIN_RE,
+  pinSelector,
   readPageScript,
   refSelector,
   type RawElement,
@@ -21,6 +26,9 @@ export const SCROLL_PX = 700;
 export const VIEWPORT = { width: 1280, height: 800 } as const;
 
 export type InspectResult = BrowserTargetInfo & { screenshotPng?: string };
+
+/** How an action designates its element: pin (approved node) > ref (last read) > CSS selector. */
+export type BrowserTarget = Pick<BrowserRequest, 'ref' | 'selector' | 'pin'>;
 
 export class BrowserActionError extends Error {}
 
@@ -130,20 +138,27 @@ export class BrowserManager {
     return page;
   }
 
-  private locate(page: Page, req: Pick<BrowserRequest, 'ref' | 'selector'>): Locator {
-    if (req.ref) {
-      try {
-        return page.locator(refSelector(req.ref)).first();
-      } catch (err) {
-        throw new BrowserActionError((err as Error).message);
-      }
+  private locate(page: Page, req: BrowserTarget): Locator {
+    try {
+      // No `.first()` for a pin: it must designate exactly one node (checked by ensureExists).
+      if (req.pin !== undefined) return page.locator(pinSelector(req.pin));
+      if (req.ref) return page.locator(refSelector(req.ref)).first();
+    } catch (err) {
+      throw new BrowserActionError((err as Error).message);
     }
     if (req.selector?.trim()) return page.locator(req.selector.trim()).first();
     throw new BrowserActionError('Élément cible requis : « ref » (issu de « read ») ou « selector ».');
   }
 
-  private async ensureExists(locator: Locator, req: Pick<BrowserRequest, 'ref' | 'selector'>): Promise<void> {
-    if ((await locator.count()) === 0) {
+  private async ensureExists(locator: Locator, req: BrowserTarget): Promise<void> {
+    const count = await locator.count();
+    if (req.pin !== undefined) {
+      // The approved node only: never another element that took its ref or its place.
+      if (count === 0) throw new BrowserActionError("L'élément validé n'est plus sur la page (page rechargée ou modifiée) : action non exécutée.");
+      if (count > 1) throw new BrowserActionError(`L'élément validé est ambigu (${count} éléments correspondent) : action non exécutée.`);
+      return;
+    }
+    if (count === 0) {
       const what = req.ref ? `la référence « ${req.ref} » (refais un « read » : les références changent à chaque lecture)` : `le sélecteur « ${req.selector} »`;
       throw new BrowserActionError(`Aucun élément trouvé pour ${what}.`);
     }
@@ -194,7 +209,7 @@ export class BrowserManager {
           }
           case 'press': {
             if (!req.key?.trim()) throw new BrowserActionError('Touche requise pour « press » (ex. « Enter »).');
-            if (req.ref || req.selector) {
+            if (req.pin !== undefined || req.ref || req.selector) {
               const target = this.locate(page, req);
               await this.ensureExists(target, req);
               await target.press(req.key, { timeout: ACTION_TIMEOUT_MS });
@@ -252,25 +267,46 @@ export class BrowserManager {
     });
   }
 
-  /** Label of the targeted element + viewport screenshot with the element outlined in red (approval cards). */
-  async inspect(req: Pick<BrowserRequest, 'ref' | 'selector'>): Promise<InspectResult> {
+  /**
+   * Label of the targeted element + viewport screenshot with the element outlined in red (approval
+   * cards), and a `pin` on that exact node: executing the approved action with it can only hit the
+   * element the owner saw, even after later `read`s gave its ref to another element.
+   */
+  async inspect(req: BrowserTarget): Promise<InspectResult> {
     return this.mutex.run(async () => {
       const page = await this.getPage();
       let elementLabel: string | null = null;
+      let pin: string | undefined;
       try {
         const target = this.locate(page, req);
-        if ((await target.count()) > 0) {
+        const count = await target.count();
+        // A pin must still designate exactly one node, otherwise there is nothing to vouch for.
+        if (req.pin !== undefined ? count === 1 : count > 0) {
           await page.evaluate(clearMarkScript());
-          await target.evaluate((el, attr) => el.setAttribute(attr, '1'), INSPECT_MARK_ATTR);
+          // An already pinned node keeps its pin: every pending approval on it stays valid. The
+          // attribute is in the page's hands though: anything but a pin inspect could have issued
+          // (a UUID) is overwritten — no approval can be waiting on it.
+          const marked = await target.evaluate(
+            (el, [markAttr, pinAttr, pinPattern, fresh]) => {
+              el.setAttribute(markAttr, '1');
+              const existing = el.getAttribute(pinAttr);
+              if (existing !== null && new RegExp(pinPattern).test(existing)) return existing;
+              el.setAttribute(pinAttr, fresh);
+              return fresh;
+            },
+            [INSPECT_MARK_ATTR, PIN_ATTR, PIN_RE.source, randomUUID()] as const,
+          );
+          // Checked again here: the page's scripts can tamper with the builtins the function above uses.
+          pin = isPin(marked) ? marked : undefined;
           const raw = (await page.evaluate(outlineMarkedScript())) as RawElement | null;
           if (raw) elementLabel = nameOf(raw) || raw.tag;
         }
         const screenshotPng = (await page.screenshot({ type: 'png' })).toString('base64');
-        return { ...(await this.snapshot(page)), elementLabel, screenshotPng };
+        return { ...(await this.snapshot(page)), elementLabel, ...(pin ? { pin } : {}), screenshotPng };
       } catch (err) {
         if (err instanceof BrowserActionError) throw err;
         // Page in a weird state (navigating…): still answer with what we know.
-        return { ...(await this.snapshot(page).catch(() => ({ url: page.url(), title: '' }))), elementLabel };
+        return { ...(await this.snapshot(page).catch(() => ({ url: page.url(), title: '' }))), elementLabel, ...(pin ? { pin } : {}) };
       } finally {
         await page.evaluate(clearMarkScript()).catch(() => undefined);
       }

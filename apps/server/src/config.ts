@@ -24,8 +24,12 @@ const webSchema = baseSchema.extend({
   ENCRYPTION_KEY: z.string().min(32, 'ENCRYPTION_KEY doit contenir au moins 32 caractères'),
   SETUP_TOKEN: optionalSecret,
   UI_DIST: z.string().default(new URL('../../ui/dist', import.meta.url).pathname),
-  /** Trust X-Forwarded-For: 'true', 'false', or the IP/CIDR of Nginx Proxy Manager (recommended). */
-  TRUST_PROXY: z.string().default('true'),
+  /**
+   * Peers allowed to set the client address through X-Forwarded-For: the IP/CIDR of Nginx Proxy Manager
+   * (recommended), a list, 'false', or 'true' (every hop: the address becomes forgeable, warned at startup).
+   * The default trusts private networks only, so a client on the Internet cannot forge its address through NPM.
+   */
+  TRUST_PROXY: z.string().default('loopback,linklocal,uniquelocal'),
   SESSION_IDLE_HOURS: z.coerce.number().default(12),
   SESSION_ABSOLUTE_DAYS: z.coerce.number().default(30),
 });

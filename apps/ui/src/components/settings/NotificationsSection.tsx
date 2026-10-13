@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Bell, BellOff } from 'lucide-react';
 import { post } from '../../lib/api';
-import { currentSubscription, disablePush, enablePush, pushSupported } from '../../lib/push';
+import { currentSubscription, disablePush, enablePush, pushSupported, syncPush } from '../../lib/push';
 import { toast } from '../../lib/toast';
 import { Badge, Spinner } from '../ui';
 import { SettingsSection } from './SettingsSection';
@@ -15,8 +15,14 @@ export function NotificationsSection() {
   const refresh = async () => {
     if (!pushSupported()) return setState('unsupported');
     if (Notification.permission === 'denied') return setState('denied');
-    const sub = await currentSubscription().catch(() => null);
-    setState(sub ? 'on' : 'off');
+    try {
+      // 'on' only when the server has this device's subscription, made with its current key.
+      setState((await syncPush()) ? 'on' : 'off');
+    } catch {
+      // Server unreachable: only the browser's side can be checked.
+      const sub = await currentSubscription().catch(() => null);
+      setState(sub ? 'on' : 'off');
+    }
   };
 
   useEffect(() => {
@@ -40,7 +46,10 @@ export function NotificationsSection() {
       toast.info('Notifications désactivées sur cet appareil');
       void refresh();
     },
-    onError: (err) => toast.fromError(err, 'Désactivation impossible'),
+    onError: (err) => {
+      toast.fromError(err, 'Désactivation impossible');
+      void refresh();
+    },
   });
   const test = useMutation({
     mutationFn: () => post<{ delivered: number }>('/api/push/test'),
