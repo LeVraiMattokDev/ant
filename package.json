@@ -8,6 +8,7 @@
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
+    "test:deploy": "node --test deploy/tests/*.test.mjs",
     "dev:web": "pnpm --filter @ant/server dev:web",
     "dev:worker": "pnpm --filter @ant/server dev:worker",
     "dev:ui": "pnpm --filter @ant/ui dev"

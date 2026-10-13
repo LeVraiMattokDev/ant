@@ -13,11 +13,8 @@ import { RoutineEditor, type RoutineFields } from '../components/routines/Routin
 import { Badge, EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner, Toggle, cx } from '../components/ui';
 import { BotAvatar } from '../components/BotAvatar';
 
-/**
- * A bot's proposal waiting for the owner. The server flags it (`proposed`); an older server does not, and then
- * a disabled routine that never ran is the closest guess.
- */
-export const isProposal = (r: RoutineDTO) => !r.enabled && (r.proposed ?? !r.lastRunAt);
+/** A bot's proposal (routine_propose) waiting for the owner: flagged by the server until the owner enables it. */
+export const isProposal = (r: RoutineDTO) => !r.enabled && r.proposed;
 
 function useRoutineMutations() {
   const qc = useQueryClient();

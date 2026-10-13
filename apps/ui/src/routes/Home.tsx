@@ -12,6 +12,7 @@ import { useCancelRun } from '../components/chat/ActivityBar';
 import { Badge, EmptyState, Gauge, PageHeader, Spinner, cx } from '../components/ui';
 import { BotStatus } from './Bots';
 import { BotAvatar } from '../components/BotAvatar';
+import { FeatureHomeCards } from '../features';
 
 function Card({ title, action, children, className }: { title: string; action?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
@@ -268,6 +269,7 @@ export function HomePage() {
                   </ul>
                 </Card>
               )}
+              <FeatureHomeCards />
               <QuotaCard />
               <Card title="Bots" action={<Link to="/bots" className="text-[12.5px] text-accent-text hover:underline">Gérer</Link>}>
                 {!bots.data ? (

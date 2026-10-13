@@ -8,6 +8,7 @@ import { Composer } from '../components/chat/Composer';
 import { ThreadPane } from '../components/chat/ThreadPane';
 import { BotAvatar, GroupAvatar } from '../components/BotAvatar';
 import { EmptyState, ErrorBlock, LoadingBlock } from '../components/ui';
+import { FeatureConversationTop } from '../features';
 
 export function ConversationPage() {
   const { channelId = '', messageId } = useParams();
@@ -61,6 +62,7 @@ export function ConversationPage() {
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
         <ChannelHeader channel={channel} members={members} dmBot={dmBot} />
+        <FeatureConversationTop channel={channel} />
         <MessageList channelId={channel.id} bots={bots} focusMessageId={params.get('m')} empty={empty} />
         <ActivityBar channelId={channel.id} bots={bots} />
         <Composer

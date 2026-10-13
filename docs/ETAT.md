@@ -91,3 +91,77 @@ Ce document dit ce qui est fait, comment c'est vérifié, et ce qui reste limit�
    comprise) et le dossier personnel (512 Mo) sont pris sur la mémoire du conteneur : le cache de pip est désactivé, celui de
    npm est dans `/workspace/.cache/npm`, et les gros outils s'installent dans `/workspace` (par exemple un environnement
    virtuel Python).
+
+## Évolutions en cours (équipes A à D)
+
+Conception et répartition : [ARCHITECTURE § 19](ARCHITECTURE.md#19-évolutions) ; contrat :
+[API.md, « Évolutions »](API.md#évolutions--contrat-des-équipes-a-à-d). Chaque équipe tient à jour sa sous-section.
+
+### Socle (fait)
+
+- Migration `0003_features` : nouvelles tables (`followups`, `channel_reads`, `owner_presence`, `service_status`, `drafts`,
+  `watches`) et colonnes, avec reprise des données. Vérifiée sur une base neuve (tests du serveur) et sur une base de la
+  version précédente remplie de données : routines déjà proposées marquées `proposed`, origine des coûts reprise des
+  exécutions, premier démarrage marqué fait quand des bots existent ; une seconde application ne change rien.
+- Types partagés, réglages (avec valeurs par défaut) et points d’extension des modules (worker, web, interface), couverts
+  par `apps/server/test/foundation.test.ts` et `apps/ui/test/features.test.tsx`.
+- Vie du worker (`service_status`) et projection mensuelle dans `GET /api/quota` ; origine (`purpose`, `routine_id`) de toute
+  consommation ; plafond par exécution sur l’abonnement (5 $ par défaut, 0 pour le désactiver) ; aucun heartbeat, routine ni
+  résumé pendant l’arrêt d’urgence.
+- Non vérifiable ici (aucun identifiant Claude) : l’effet réel de `maxBudgetUsd` sur une exécution par abonnement. Le test de
+  connexion du premier démarrage (B) permettra de le vérifier ; en cas de souci, le réglage se désactive avec 0.
+
+### Socle : corrections après revue (fait)
+
+Tests : `apps/server/test/foundation-review.test.ts`, `apps/ui/test/foundation-isolation.test.tsx`, ajouts dans
+`{sched,runtime,web}-fixes.test.ts` et `apps/computer/test/browser.test.ts`.
+- `afterRun` voit chaque état final (annulée en attente, bot en pause, conversation archivée, abandon faute de calcul,
+  échec du travail, orpheline, occurrence remplacée), avec le déclencheur d’origine et la durée de toute la tâche quand
+  la dernière exécution est une suite automatique, l’indicateur `silent` et les fichiers joints. Une exécution annulée
+  pendant son attente est traitée tout de suite, pas à l’heure prévue de sa reprise.
+- Une erreur passagère de la base au démarrage d’une exécution n’est plus prise pour une conversation archivée.
+- Modules isolés partout : hooks synchrones du worker, routes et démarrage du web, chaque contribution de l’interface.
+- Réglages écrits sous verrou ; projection mensuelle d’au moins 3 jours ; `/healthz` qui interroge la base ; coût d’un
+  appel ponctuel ajouté à son exécution ; sessions `watch:<id>` résumées d’après leurs exécutions.
+- Navigateur : une cible vide (`ref: ""`) est une touche sur la page, à la demande comme à l’exécution ; un élément sans
+  libellé n’ouvre pas de carte impossible à exécuter ; un élément dans un Shadow DOM ouvert garde son libellé.
+- Contrat (API.md) : clés de déduplication uniques, `draft.updated` réduit à l’identifiant, veilles par `curl` seulement
+  dans ce tour, réponse des exécutions silencieuses, pause d’un bot seul et healthchecks confiés à B ; « À partir d’un
+  modèle » et permissions réduites d’un bot vierge sortis de ce tour (ARCHITECTURE § 19.2).
+
+### Reprises entre flux (fait)
+
+Points laissés d'un flux de correction à l'autre, terminés sur le socle (tests : `apps/server/test/{web,sched,runtime}-fixes.test.ts`,
+`apps/ui/test/screens-fixes.test.tsx`, `apps/computer/test/entrypoint.test.ts`).
+- Sécurité : ajout d'une passkey avec le mot de passe (Réglages et premier démarrage), option « Supprimer aussi toutes
+  les passkeys » au changement de mot de passe, adresse du proxy vue par Ant dans Réglages → Sécurité (avertissement si
+  `TRUST_PROXY=true`), message clair quand `ENCRYPTION_KEY` ne correspond pas au secret TOTP, jeton d'initialisation
+  désigné par `SETUP_TOKEN` dans les messages et les journaux, terminal et écran qui s'arrêtent sur une session expirée.
+- Planification : au plus une occurrence planifiée d'une routine en attente, « Exécuter maintenant » dans la session de la
+  routine, routines d'un bot archivé jamais lancées, exécution annulée si sa conversation a été archivée, dernier emplacement
+  d'exécution gardé pour tes demandes, push « Ant est en pause » urgent seulement quand tu attends une réponse.
+- Navigateur : un clic ou une touche validés sont rejoués sur le nœud épinglé montré sur la carte (`pin`).
+- Interface : bannière globale « Le worker ne répond pas », pagination des messages par identifiant, position des morceaux
+  diffusés (`message.delta.offset`), déconnexion depuis les Réglages qui coupe aussi les notifications, terminologie
+  « équipe », Entrée qui va à la ligne sur téléphone dans « Nouvelle routine ».
+- Non repris, volontairement : identifiants de bots archivés réservés (contrainte d'unicité, historique d'audit par
+  identifiant) ; suppression d'une passkey sans mot de passe (n'ouvre aucun accès, auditée et signalée) ; pause
+  « structurelle » des tâches autonomes sans clé API (le README promet qu'elles attendent, bornées à 6 h) ; estimation
+  du coût par table de prix quand aucun résultat n'arrive (doublon fragile) ; minuterie de durée maximale d'une exécution
+  et relance « suivie d'effet » automatique (nouveaux réglages, hors de ce tour).
+
+### A — Suivi et notifications
+
+À venir.
+
+### B — Santé et confiance
+
+À venir.
+
+### C — Entrées
+
+À venir.
+
+### D — Capacités des agents
+
+À venir.

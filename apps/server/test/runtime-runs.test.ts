@@ -814,7 +814,7 @@ describe.skipIf(!hasDb)('runtime: runs, sessions and accounting', () => {
         if (req.action !== 'screenshot') executed.push(req);
         return { ok: true, url: 'https://x.com/compose/post', title: 'X' };
       },
-      inspect: async () => ({ url: 'https://x.com/compose/post', title: 'X', elementLabel: 'Poster' }),
+      inspect: async () => ({ url: 'https://x.com/compose/post', title: 'X', elementLabel: 'Poster', pin: '6f1e9c2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b' }),
     });
     const deps = workerDeps(t.ctx, fakeQuery(async function* () {}).query, { computer });
     const rc: RunContext = {
@@ -826,6 +826,7 @@ describe.skipIf(!hasDb)('runtime: runs, sessions and accounting', () => {
       channel: null,
       computeSource: 'subscription',
       pendingApprovals: [],
+      outputs: { attachments: [] },
       botsBySlug: new Map(),
       setActivity: async () => undefined,
     };

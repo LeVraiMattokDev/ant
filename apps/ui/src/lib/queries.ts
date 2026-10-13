@@ -106,6 +106,14 @@ export function useBotMap(): Map<string, BotDTO> {
   return useMemo(() => new Map((data ?? []).map((b) => [b.id, b])), [data]);
 }
 
+/**
+ * Cursor of the page before `lastPage` (oldest first): the id of its oldest message, an exact keyset cursor on the
+ * server. A date would skip messages written within the same millisecond as that message.
+ */
+export function nextMessagesCursor(lastPage: Pick<MessageDTO, 'id'>[]): string | undefined {
+  return lastPage.length < MESSAGES_PAGE_SIZE ? undefined : lastPage[0]?.id;
+}
+
 export function useChannelMessages(channelId: string) {
   return useInfiniteQuery<MessageDTO[], Error, InfiniteData<MessageDTO[], string | null>, readonly unknown[], string | null>({
     queryKey: qk.messages(channelId),
@@ -116,8 +124,7 @@ export function useChannelMessages(channelId: string) {
         { before: pageParam ?? undefined, limit: MESSAGES_PAGE_SIZE },
         signal,
       ),
-    getNextPageParam: (lastPage) =>
-      lastPage.length < MESSAGES_PAGE_SIZE ? undefined : (lastPage[0]?.createdAt ?? undefined),
+    getNextPageParam: nextMessagesCursor,
     staleTime: 60_000,
   });
 }

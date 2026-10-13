@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
-import type { TaskDTO, TaskStatus } from '@ant/shared';
+import type { TaskAssignee, TaskDTO, TaskStatus } from '@ant/shared';
 import { tasks } from '../db/schema';
 import { taskToDTO } from '../lib/dto';
 import { HttpError } from '../lib/errors';
@@ -16,6 +16,8 @@ export interface TaskInput {
   status?: TaskStatus;
   dueAt?: string | null;
   sourceMessageId?: string | null;
+  /** Default `bot`. */
+  assignee?: TaskAssignee;
 }
 
 function parseDue(value: string | null | undefined): Date | null | undefined {
@@ -51,6 +53,7 @@ export async function createTask(ctx: Ctx, input: TaskInput): Promise<TaskDTO> {
       title: input.title.trim().slice(0, 300),
       details: input.details ?? '',
       status: input.status ?? 'open',
+      assignee: input.assignee ?? 'bot',
       dueAt,
       sourceMessageId: input.sourceMessageId ?? null,
     })

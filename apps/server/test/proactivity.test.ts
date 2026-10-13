@@ -76,6 +76,7 @@ describe.skipIf(!hasDb)('proactivity', () => {
       channel: null,
       computeSource: 'api' as const,
       pendingApprovals: [],
+      outputs: { attachments: [] },
       botsBySlug: new Map(),
       setActivity: async () => undefined,
     };

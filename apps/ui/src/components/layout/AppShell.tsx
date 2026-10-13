@@ -1,5 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { FeatureBanners, FeatureEffects } from '../../features';
+import { ErrorBoundary } from '../../lib/error-boundary';
 import { DESKTOP_QUERY, useMediaQuery } from '../../lib/hooks';
 import { NewChannelModal } from '../chat/NewChannelModal';
 import { FilesDrawer } from '../computer/FilesDrawer';
@@ -59,20 +61,26 @@ export function AppShell({ children }: { children: ReactNode }) {
             )}
           >
             <PausedBanner />
+            <FeatureBanners />
             <ConnectionBanner />
             <main className="flex min-h-0 flex-1 flex-col">{children}</main>
           </div>
 
           {computer && (
-            <Suspense fallback={null}>
-              <ComputerPanel onClose={() => setComputer(false)} />
-            </Suspense>
+            // A panel that fails to load (chunk gone after an update) or to render stays in its column: the shell
+            // and the conversation remain usable.
+            <ErrorBoundary label="Le panneau Ordinateur n’a pas pu s’afficher.">
+              <Suspense fallback={null}>
+                <ComputerPanel onClose={() => setComputer(false)} />
+              </Suspense>
+            </ErrorBoundary>
           )}
         </div>
       </div>
       {!inConversation && <MobileTabBar />}
       <NewChannelModal open={newChannel} onClose={() => setNewChannel(false)} />
       <FilesDrawer open={files} onClose={() => setFiles(false)} />
+      <FeatureEffects />
     </ShellContext.Provider>
   );
 }

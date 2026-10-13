@@ -54,6 +54,7 @@ function channel(p: Partial<ChannelDTO> & { id: string }): ChannelDTO {
     dmBotId: null,
     lastMessageAt: null,
     lastMessage: null,
+    lastReadAt: null,
     createdAt: '2026-10-01T10:00:00.000Z',
     ...p,
   };
@@ -401,7 +402,8 @@ describe('ActivityBar when the worker is down', () => {
       </Providers>,
     );
     expect(screen.getByText('Content attend le worker')).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toContain('Le worker ne répond pas');
+    // The explanation is the shell's global banner (PausedBanner), not repeated above the composer.
+    expect(screen.queryByRole('status')).toBeNull();
   });
 
   it('keeps the usual label when the worker is alive or not reported', () => {

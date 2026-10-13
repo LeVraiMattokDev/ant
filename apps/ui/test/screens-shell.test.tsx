@@ -151,6 +151,7 @@ describe('ConnectionBanner', () => {
       dmBotId: null,
       lastMessageAt: '2026-10-12T10:00:00.000Z',
       lastMessage: null,
+      lastReadAt: null,
       createdAt: '2026-10-01T10:00:00.000Z',
     };
 
@@ -272,7 +273,7 @@ describe('Screens keep their data when a refresh fails', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     qc.setQueryData(qk.bots, [bot({ id: 'b1' })]);
     qc.setQueryData<ChannelDTO[]>(qk.channels, [
-      { id: 'g1', kind: 'group', name: 'projet', topic: '', botIds: ['b1'], dmBotId: null, lastMessageAt: null, lastMessage: null, createdAt: '2026-10-01T10:00:00.000Z' },
+      { id: 'g1', kind: 'group', name: 'projet', topic: '', botIds: ['b1'], dmBotId: null, lastMessageAt: null, lastMessage: null, lastReadAt: null, createdAt: '2026-10-01T10:00:00.000Z' },
     ]);
     qc.setQueryData<MessagePages>(qk.messages('g1'), { pages: [[msg({ id: 'm1', channelId: 'g1', content: 'Rapport prêt' })]], pageParams: [null] });
     render(
@@ -337,8 +338,8 @@ describe('Screens keep their data when a refresh fails', () => {
 describe('Sidebar wording and selected row', () => {
   const dev = bot({ id: 'b1', dmChannelId: 'dm1', role: 'Développeur' });
   const channels: ChannelDTO[] = [
-    { id: 'dm1', kind: 'dm', name: 'Dev', topic: '', botIds: ['b1'], dmBotId: 'b1', lastMessageAt: '2026-10-12T10:00:00.000Z', lastMessage: null, createdAt: '2026-10-01T10:00:00.000Z' },
-    { id: 'g1', kind: 'group', name: 'Kozmo', topic: '', botIds: ['b1'], dmBotId: null, lastMessageAt: null, lastMessage: null, createdAt: '2026-10-01T10:00:00.000Z' },
+    { id: 'dm1', kind: 'dm', name: 'Dev', topic: '', botIds: ['b1'], dmBotId: 'b1', lastMessageAt: '2026-10-12T10:00:00.000Z', lastMessage: null, lastReadAt: null, createdAt: '2026-10-01T10:00:00.000Z' },
+    { id: 'g1', kind: 'group', name: 'Kozmo', topic: '', botIds: ['b1'], dmBotId: null, lastMessageAt: null, lastMessage: null, lastReadAt: null, createdAt: '2026-10-01T10:00:00.000Z' },
   ];
 
   const setup = (route: string) => {

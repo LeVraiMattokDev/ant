@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { describeCron, type RoutineDraftDTO, type RoutineInput } from '@ant/shared';
+import { COMPLETION_PUSH_MODES, describeCron, type RoutineDraftDTO, type RoutineInput } from '@ant/shared';
 import { audit } from '../../lib/audit';
 import { HttpError } from '../../lib/errors';
 import { RPC_CHANNEL } from '../../lib/events';
@@ -9,7 +9,7 @@ import { enqueue } from '../../lib/jobs';
 import { getSettings } from '../../lib/settings';
 import { assertActiveChannel } from '../../services/channels';
 import type { Ctx } from '../../services/context';
-import { createRoutine, deleteRoutine, listRoutines, nextRuns, updateRoutine, validateCron } from '../../services/routines';
+import { createRoutine, deleteRoutine, listRoutines, nextRuns, routineThreadKey, updateRoutine, validateCron } from '../../services/routines';
 import { requestRun } from '../../services/runs';
 import { routines } from '../../db/schema';
 import { eq } from 'drizzle-orm';
@@ -23,7 +23,13 @@ export interface RoutineParser {
  * The web service holds no Claude credentials: natural-language parsing runs in the worker
  * (job `routine.parse`), which answers on the `ant_rpc` NOTIFY channel.
  */
-export async function createWorkerRoutineParser(ctx: Ctx, timeoutMs = 75_000): Promise<RoutineParser> {
+/**
+ * Below the 60 s proxy_read_timeout of Nginx Proxy Manager's default proxy host: the owner gets this service's French
+ * answer (and the manual entry) rather than the proxy's bare 504.
+ */
+export const ROUTINE_PARSE_TIMEOUT_MS = 55_000;
+
+export async function createWorkerRoutineParser(ctx: Ctx, timeoutMs = ROUTINE_PARSE_TIMEOUT_MS): Promise<RoutineParser> {
   const waiting = new Map<string, { resolve: (d: RoutineDraftDTO) => void; reject: (e: Error) => void }>();
   await ctx.sql.listen(RPC_CHANNEL, (payload) => {
     try {
@@ -44,7 +50,7 @@ export async function createWorkerRoutineParser(ctx: Ctx, timeoutMs = 75_000): P
         waiting.set(requestId, { resolve, reject });
         setTimeout(() => {
           if (waiting.delete(requestId)) {
-            reject(new HttpError(504, 'parse_timeout', 'Le worker n’a pas répondu à temps. Saisis l’horaire manuellement (expression cron).'));
+            reject(new HttpError(504, 'parse_timeout', 'Le worker n’a pas répondu à temps. Clique sur « Saisir l’horaire moi-même » pour indiquer l’expression cron.'));
           }
         }, timeoutMs);
       });
@@ -63,6 +69,8 @@ const routineInput = z.object({
   instruction: z.string().min(1).max(4000),
   urgent: z.boolean().optional(),
   enabled: z.boolean().optional(),
+  completionPush: z.enum(COMPLETION_PUSH_MODES).nullable().optional(),
+  silentIfNothing: z.boolean().optional(),
 });
 
 export async function routineRoutes(app: FastifyInstance, deps: WebDeps, parser?: RoutineParser): Promise<void> {
@@ -112,6 +120,8 @@ export async function routineRoutes(app: FastifyInstance, deps: WebDeps, parser?
       botId: routine.botId,
       channelId: routine.channelId,
       threadRootId: null,
+      // The routine's own agent session, like its scheduled occurrences: it remembers them and they remember this one.
+      threadKey: routineThreadKey(routine.id),
       trigger: 'routine',
       priority: 'interactive',
       origin: 'user',

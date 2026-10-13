@@ -167,11 +167,26 @@ const MARK_ATTR = 'data-ant-inspect';
 export const INSPECT_MARK_SELECTOR = `[${MARK_ATTR}]`;
 export const INSPECT_MARK_ATTR = MARK_ATTR;
 
+/**
+ * Every element matching `sel` in `root`, open shadow roots included: Playwright's locators pierce them, so the
+ * element inspect marked may live inside a web component, where `document.querySelector` cannot see it.
+ */
+const DEEP_QUERY_ALL_JS = `function deepQueryAll(root, sel, out) {
+  var found = root.querySelectorAll(sel);
+  for (var i = 0; i < found.length; i++) out.push(found[i]);
+  var all = root.querySelectorAll('*');
+  for (var j = 0; j < all.length; j++) {
+    if (all[j].shadowRoot) deepQueryAll(all[j].shadowRoot, sel, out);
+  }
+  return out;
+}`;
+
 /** Outlines the marked element in red and returns its raw facts (or null). */
 export function outlineMarkedScript(): string {
   return `(function () {
   var collect = ${COLLECT_ELEMENT_JS};
-  var el = document.querySelector('${INSPECT_MARK_SELECTOR}');
+  var deepQueryAll = ${DEEP_QUERY_ALL_JS};
+  var el = document.querySelector('${INSPECT_MARK_SELECTOR}') || deepQueryAll(document, '${INSPECT_MARK_SELECTOR}', [])[0];
   if (!el) return null;
   el.setAttribute('data-ant-prev-outline', el.style.outline || '');
   el.setAttribute('data-ant-prev-outline-offset', el.style.outlineOffset || '');
@@ -182,10 +197,11 @@ export function outlineMarkedScript(): string {
 })()`;
 }
 
-/** Restores the outline and removes the inspection mark. */
+/** Restores the outline and removes the inspection mark (open shadow roots included). */
 export function clearMarkScript(): string {
   return `(function () {
-  var els = document.querySelectorAll('${INSPECT_MARK_SELECTOR}');
+  var deepQueryAll = ${DEEP_QUERY_ALL_JS};
+  var els = deepQueryAll(document, '${INSPECT_MARK_SELECTOR}', []);
   for (var i = 0; i < els.length; i++) {
     var el = els[i];
     if (el.hasAttribute('data-ant-prev-outline')) {

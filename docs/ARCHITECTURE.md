@@ -21,6 +21,7 @@ Sommaire
 16. [Plan par phases](#16-plan-par-phases)
 17. [Limites connues et risques](#17-limites-connues-et-risques)
 18. [Questions ouvertes](#18-questions-ouvertes)
+19. [Évolutions](#19-évolutions)
 
 ---
 
@@ -123,8 +124,11 @@ Défense en profondeur, du plus large au plus fin :
 2. **Dans la VM**, chaîne `DOCKER-USER` d'iptables (script fourni) : le réseau `sandbox` ne peut joindre
    ni l'hôte, ni le LAN, ni `postgres` (réseau différent), seulement Internet.
 3. **Conteneur `computer`** : utilisateur non-root, `cap_drop: ALL`, `no-new-privileges`, pas de socket
-   Docker, système de fichiers racine en lecture seule sauf `/workspace`, `/tmp` et le profil navigateur,
-   limites CPU/RAM/PIDs.
+   Docker, limites CPU/RAM/PIDs. Racine en **lecture seule** (`read_only` du compose) : seuls `/workspace` et le profil
+   du navigateur (volumes) sont conservés ; `/tmp` (768 Mo) et le dossier personnel `/home/agent` (512 Mo) sont des
+   tmpfs pris sur la mémoire du conteneur et vidés à chaque redémarrage (un `~/.bashrc` piégé ne survit pas).
+   `entrypoint.sh` y remet au démarrage les fichiers de `/etc/skel` (`.bashrc`, `.profile`). Les agents savent (prompt
+   système) que les gros outils (environnement virtuel Python, `node_modules`) s'installent dans `/workspace`.
 4. **Le worker n'expose aucune commande système aux agents.** Les outils intégrés de l'Agent SDK qui
    agissent sur la machine locale (`Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, etc.)
    sont **désactivés** dans le worker. Les agents agissent uniquement via des outils MCP « Ant »
@@ -182,8 +186,18 @@ message utilisateur / @mention / transfert / heartbeat / routine / validation ac
 
 - Le worker tourne en continu : fermer l'interface n'arrête rien.
 - Parallélisme : plusieurs bots en même temps, limite globale réglable (par défaut 3 runs simultanés)
-  pour ne pas saturer la VM ni l'abonnement.
-- Reprise après redémarrage : les jobs non terminés sont rejoués ; la session SDK reprend via `resume`.
+  pour ne pas saturer la VM ni l'abonnement. (implémentation) Le dernier emplacement libre est gardé pour tes propres
+  demandes (priorité `interactive`) : une rafale de routines, heartbeats ou transferts ne te fait jamais attendre la fin
+  d'une exécution de fond. Avec un seul emplacement, tout le partage.
+- Reprise après redémarrage : les jobs non terminés sont rejoués, sauf ceux qui ont épuisé leurs essais, marqués en
+  échec ; la session SDK reprend via `resume`. Un arrêt propre du worker ne perd rien : chaque exécution en cours termine
+  son tour, enregistre sa consommation et retourne en file, puis reprend sa session au démarrage suivant avec une note
+  (« interrompu, reprends »).
+- (implémentation) Le prompt système (`snapshot: false`) ne contient que la partie stable (rôle, instructions, mémoire
+  épinglée, puis résumé de session après la frontière de cache) ; le contexte propre à chaque exécution (date et heure,
+  conversation, déclencheur, tâches ouvertes) est en tête du message utilisateur. Le préfixe reste ainsi dans le cache.
+- (implémentation) Une exécution arrêtée par la limite d'étapes (`error_max_turns`) est prolongée automatiquement deux
+  fois au plus, dans la même session, avec le même modèle et les mêmes clés d'origine (routine, suivi…).
 
 ---
 
@@ -290,7 +304,9 @@ exactement ce qu'il faut pour te garder de la marge.
 - Les coûts de l'Agent SDK sont des **estimations**. Je recommande **en plus** de régler une limite de
   dépense dans la Claude Console (garde-fou côté serveur, qu'Ant ne peut pas dépasser même en cas de bug).
 - Si les deux sources sont épuisées : tous les bots passent en pause, un message système et une
-  notification push te préviennent, avec l'heure de réinitialisation prévue.
+  notification push te préviennent, avec l'heure de réinitialisation prévue. (implémentation) Ce push part au plus une
+  fois par jour ; il attend la fin des heures de silence, sauf quand tu attends toi-même une réponse (demande de ta
+  part). Une tâche autonome sans source de calcul reste en pause 6 h au plus, puis est abandonnée avec un message ⏹️.
 
 ---
 
@@ -389,6 +405,13 @@ conso abonnement / dépenses API de la veille.
 → **carte de confirmation** affichant la lecture humaine (« Tous les lundis à 08:00, Europe/Zurich ») et
 les 3 prochaines exécutions → enregistrée → planifiée. Modifiable/désactivable depuis l'écran Routines.
 
+(implémentation) Chaque routine a sa propre session d'agent (`routine:<id>`), pour ses occurrences planifiées comme
+pour « Exécuter maintenant » : elle ne reprend pas (et ne paie pas) toute la conversation où elle publie, se souvient de
+ses passages précédents et lit ce qui a été écrit dans son canal depuis le dernier. Au plus une occurrence planifiée
+attend : une nouvelle occurrence annule la précédente encore en file ou en pause. Les routines d'un bot archivé, ou
+d'un canal archivé, ne partent plus. Une routine proposée par un bot (`routine_propose`) reste « proposée » jusqu'à ce
+que tu l'actives.
+
 ---
 
 ## 11. Validations et journal d'audit
@@ -403,12 +426,16 @@ Mécanisme :
   reçoit « en attente de validation n°X ».
 - Quand tu valides, **le worker exécute exactement les paramètres validés** (pas une nouvelle
   génération du modèle), puis reprend la session du bot avec le résultat. Robuste aux redémarrages :
-  rien n'est « suspendu » en mémoire.
+  rien n'est « suspendu » en mémoire. (implémentation) Une validation s'exécute au plus une fois : l'exécution est
+  réservée avant de commencer, et une exécution interrompue par un redémarrage se termine « échec — interrompue, état
+  inconnu », avec un message et un push, sans être rejouée.
 - Refus → le bot est informé avec ton éventuel commentaire. Expiration réglable.
 - Navigateur : les actions `click`/`submit` sur des domaines classés sensibles (liste éditable :
   banques, boutiques, réseaux sociaux, messageries, comptes) passent par validation, avec capture
   d'écran de la page et de l'élément ciblé. Les commandes terminal correspondant à des motifs
-  dangereux (`rm -r` hors /workspace, `curl … | sh`, etc.) aussi.
+  dangereux (`rm -r` hors /workspace, `curl … | sh`, etc.) aussi. (implémentation) La carte porte l'épingle (`pin`)
+  du nœud exact montré : l'action validée est rejouée sur ce nœud, après vérification de son libellé, même si une lecture
+  ultérieure a donné sa référence `eN` à un autre élément ; s'il a disparu ou changé, rien n'est fait.
 
 ### Journal d'audit
 Table **en ajout seul** (un trigger Postgres interdit UPDATE/DELETE) : chaque run, chaque appel d'outil
@@ -467,6 +494,14 @@ connexion. Consultable et filtrable dans l'UI, exportable en CSV.
 - `audit_log` (bigserial, ajout seul) : `at`, `actor`, `event`, `run_id`, `tool`, `input_redacted`, `outcome`, `ip`.
 - `push_subscriptions` : `endpoint`, `p256dh`, `auth`, `user_agent`, `last_ok_at`.
 
+**Évolutions (migration `0003_features`, § 19)**
+- `bots.completion_push`, `routines.completion_push` (nullable : hérite), `routines.proposed`, `routines.silent_if_nothing`,
+  `tasks.assignee` (`bot`\|`owner`), `approvals.revoked_at`, `run_model_usage.purpose` et `routine_id`.
+- `followups` : rappels (`reminder`, sans modèle) et travail différé (`work`, run déclencheur `followup`), un par échéance de tâche.
+- `channel_reads` (marque de lecture par canal), `owner_presence` (une ligne par connexion temps réel).
+- `service_status` (vie du worker, de la sauvegarde, dernier test de connexion).
+- `drafts` (brouillons X), `watches` (veilles de pages et flux).
+
 Prévu pour plus tard : `connectors` / `connector_credentials` (Gmail, Calendar, X, GitHub, Discord) et
 `voice_sessions`, sans changer le reste.
 
@@ -490,9 +525,11 @@ prendre/rendre la main) · **Routines** · **Mémoire** · **Validations en atte
 
 ## 14. Sécurité
 
-- **Pas d'inscription.** Premier lancement : jeton d'initialisation à usage unique affiché dans les logs
-  du conteneur → création du mot de passe (≥ 14 caractères, vérifié contre une liste de mots de passe
-  courants) + **passkey** (WebAuthn) **et/ou TOTP**, + 10 codes de secours.
+- **Pas d'inscription.** Premier lancement : jeton d'initialisation à usage unique (valeur de `SETUP_TOKEN` dans
+  `.env` ; quand elle est vide, Ant en génère un à chaque démarrage et l'affiche dans les logs du conteneur `web`)
+  → création du mot de passe (≥ 14 caractères, vérifié contre une liste de mots de passe
+  courants) + **passkey** (WebAuthn) **et/ou TOTP**, + 10 codes de secours. Ajouter une passkey redemande le mot de
+  passe ; changer le mot de passe peut supprimer toutes les passkeys.
 - argon2id ; limitation : 5 échecs / 15 min par IP puis délai exponentiel ; journalisation des connexions.
 - Session : cookie `__Host-` HttpOnly, Secure, SameSite=Strict, jeton aléatoire stocké haché en base,
   expiration d'inactivité (12 h) et absolue (30 j), révocation depuis l'UI.
@@ -592,3 +629,182 @@ VM 4 vCPU / 8 Go / 60 Go. Tout est modifiable dans l'interface (écrans Quota & 
    pare-feu du README). Le domaine peut rester à définir jusqu'au déploiement.
 6. **Ressources de la VM** : 4 vCPU / 8 Go / 60 Go te conviennent-ils ?
 7. **Langue** : interface et bots en français par défaut ?
+
+---
+
+## 19. Évolutions
+
+> Statut : **socle posé** (schéma, types partagés, contrat d’API, points d’extension). Quatre équipes développent en
+> parallèle, chacune dans sa branche, sans toucher au schéma, aux types partagés ni aux fichiers des autres. Contrat exact
+> des routes, outils, événements et tâches de fond : [API.md, « Évolutions »](API.md#évolutions--contrat-des-équipes-a-à-d).
+
+| Équipe | Module | Fonctionnalités |
+|---|---|---|
+| A | `tracking` | Push de fin de travail, outil `notify_owner`, lu / non-lu côté serveur, présence, vue « Suivi » (tâches de tous les bots et du propriétaire), suivis et rappels (`followup_schedule`…, déclencheur `followup`) |
+| B | `ops` | Écran Santé, arrêt d’urgence « Tout arrêter », coût par origine et projection, premier démarrage guidé (équipe de départ, test de connexion) |
+| C | `inputs` | Pièces jointes dans les deux sens, partage vers Ant (`/share`), « Approfondir » (modèle ponctuel) |
+| D | `capabilities` | Transfert avec retour, lecture web économique (`web_extract`), brouillons X, veilles sans modèle |
+
+### 19.1 Un module par fonctionnalité
+
+Chaque équipe remplit **son** module à chaque couche ; les fichiers partagés appellent tous les modules par un registre,
+déjà branché, que personne ne modifie.
+
+| Couche | Registre (figé) | Fichier de l’équipe | Ce qu’un module peut fournir |
+|---|---|---|---|
+| Worker | `apps/server/src/worker/modules/index.ts` (`WorkerModule`, `types.ts`) | `worker/modules/<module>.ts` | outils MCP, outils du sous-agent léger, libellés d’activité, section du prompt système, description et prompt des déclencheurs, exécutions silencieuses, prompt en messages SDK (images, PDF), hook après exécution, gestionnaires de tâches de fond, passage du planificateur (30 s), maintenance horaire, démarrage |
+| Web | `apps/server/src/web/modules/index.ts` (`WebModule`) | `web/modules/<module>.ts` | routes REST, démarrage / arrêt (minuteries), messages WebSocket reçus (`ClientEvent`), fermeture de connexion |
+| Interface | `apps/ui/src/features/index.tsx` (`FeatureModule`, `types.ts`) | `features/<module>/index.tsx` (+ ses composants dans ce dossier) | écrans dans le shell, écrans plein écran, navigation (rail, menu « Plus », pastille), actions du rail et du menu mobile, bannières, composants sans rendu (effets), événements temps réel, extras sous un message, entrées du menu « ··· » d’un message, haut de conversation, cartes de l’accueil, sections des réglages, panneaux de la fiche bot |
+| Partagé | `packages/shared/src/index.ts` exporte déjà les quatre | `packages/shared/src/<module>.ts` | constantes et fonctions pures (limites, modèles d’équipe, comptage X…) |
+| Tâches de fond | `JobKinds` (`lib/jobs.ts`) | — | `followup.fire`, `diagnostic`, `watch.check` déjà déclarés ; un type imprévu se déclare par augmentation de `JobKinds` depuis le fichier du module |
+
+Règles des registres :
+- Ordre fixe : `tracking`, `ops`, `inputs`, `capabilities`. Pour `describeTrigger`, `buildPrompt` et `userMessage`, le premier
+  module qui répond l’emporte : chacun ne répond que pour ses propres déclencheurs (ou ses propres données).
+- Un hook qui lève une erreur, synchrone ou non, est journalisé sans arrêter les autres modules ni l’exécution (côté
+  web : des routes qui ne s’enregistrent pas ou un démarrage en échec n’empêchent pas le service de démarrer) ; un
+  gestionnaire de tâche de fond, lui, propage l’erreur (la file la note et réessaie).
+- `afterRun` reçoit chaque état final d’une exécution, y compris celles fermées sans s’exécuter (annulée en attente, bot
+  en pause, conversation archivée, échec du travail, orpheline) : contrat de `FinishedRun` dans
+  [API.md](API.md#hook-afterrun-finishedrun).
+- Une section du prompt système ne dépend que du bot et de ses permissions (le prompt statique est mis en cache).
+- Pendant l’arrêt d’urgence (`settings.emergencyStop`), un `onSchedulerTick` ne lance rien de nouveau.
+- Dans l’interface, un slot qui n’a rien à montrer rend `null` ; les nouveaux types d’événements temps réel ne sont traités
+  que par les `onEvent` des modules. Chaque contribution est rendue dans sa propre limite d’erreur (`FeatureBoundary`) :
+  un composant qui plante disparaît seul (une entrée de navigation garde son lien, sans pastille), le shell et l’écran
+  restent.
+
+### 19.2 Conception
+
+**A — Suivi et notifications.** Le push de fin de travail est un hook `afterRun` : il combine la durée de l’exécution, le
+mode (`routine` → `bot` → réglage global, `always` / `long` / `never`) et la présence du propriétaire. La présence passe
+par la socket temps réel existante (`focus`, une ligne `owner_presence` par connexion, expirée après 60 s : une socket
+mobile meurt sans prévenir). Le lu / non-lu vit dans `channel_reads` (une marque par canal, qui n’avance que), le
+`localStorage` ne sert plus que de mise à jour optimiste. Suivis et rappels : **une table `followups` plutôt que des runs
+planifiés** — un rappel du propriétaire n’a ni bot ni modèle, un run futur apparaîtrait dans « Exécutions en cours », et une
+table se liste, se déplace et s’annule simplement ; un suivi `work` démarre au moment voulu un run déclencheur `followup`. Une
+échéance de tâche possède un seul suivi (`task_id`), seule source de l’échéance. `tasks.assignee` distingue les tâches du
+propriétaire, suivies par un bot.
+
+**B — Santé et confiance.** **`service_status` plutôt que `compute_state.worker_seen_at`** : une ligne par service (worker,
+sauvegarde, test de connexion), écrite sans publier `quota.updated` toutes les 30 s, lisible par le script de sauvegarde
+avec `psql`. La vie du worker est déjà écrite et exposée (`QuotaStatusDTO.worker`), et la bannière globale « Le worker
+ne répond pas » existe déjà (`PausedBanner`) : l'écran Santé s'y relie sans en ajouter une seconde. `/healthz` interroge
+déjà la base ; les healthchecks Docker du worker (fichier `/tmp/alive` touché par le module `ops`) et de l’ordinateur
+(`GET /health`) sont à faire par l’équipe B. L’arrêt d’urgence est un état
+`settings.emergencyStop` géré par le serveur (refusé par `PATCH /api/settings`) : pause des bots (liste mémorisée pour la
+reprise), annulation des exécutions, prise de main sur l’ordinateur, refus des validations, révocation des autorisations de
+domaine (`grantsRevokedAt`, et `approvals.revoked_at` pour une révocation à l’unité) ; le planificateur ne lance déjà plus
+rien pendant l’arrêt. Mettre un seul bot en pause annule aussi ses exécutions, et l’écran Validations propose de refuser
+les siennes. Coût par origine : chaque ligne `run_model_usage` porte déjà `purpose` et `routine_id` (runs, suites,
+appels ponctuels), la projection mensuelle est servie, le plafond par exécution sur l’abonnement est appliqué. Premier
+démarrage : test de connexion par une tâche `diagnostic` (résultat dans `service_status`), équipe de départ créée par
+`POST /api/bots/batch`, guide `/bienvenue` tant que `onboardingDoneAt` est nul (déjà posé pour les installations existantes).
+
+**C — Entrées.** Les fichiers vivent sur l’ordinateur des agents (`/workspace/inbox/AAAA-MM-JJ/…` pour les envois du
+propriétaire, n’importe où dans `/workspace` pour les bots) : **pas de table**, les métadonnées sont dans
+`messages.meta.attachments`. L’aperçu en ligne ne sert que des images et des PDF (liste blanche, `nosniff`, CSP) : un SVG
+ou un HTML écrit par un bot ne doit jamais s’exécuter sur l’origine d’Ant. Images et PDF entrent dans le prompt par le hook
+`userMessage` ; un bot joint un fichier à sa réponse par `rc.outputs.attachments` (le runner l’écrit déjà dans la réponse
+finale). « Approfondir » passe un modèle ponctuel à `dispatchUserMessage` (déjà accepté par `requestRun`, et conservé par la
+suite automatique) sans toucher au modèle par défaut du bot.
+
+**D — Capacités des agents.** Le transfert avec retour vit dans `payload.reportTo` du run délégué ; le hook `afterRun`
+réveille le délégant une seule fois quand tous ses délégués ont fini (réclamation atomique sur le run délégant). La lecture
+web économique fait lire la page par Haiku via `oneShot` en imputant le coût au run (`runId` : lignes d’usage et totaux du
+run, `purpose: 'web_extract'`).
+Brouillons X : table `drafts`, publication toujours manuelle par le lien d’intention X (les règles de X interdisent
+d’automatiser le site). Veilles : table `watches`, récupération dans l’ordinateur (sans secret ni accès au LAN) par la tâche
+`watch.check`, par `curl` seulement dans ce tour (la page Chromium est unique et partagée : le rendu par navigateur
+attend un contexte de navigation isolé dans la RPC de l’ordinateur) ; le bot n’est réveillé (déclencheur `watch`) que
+si l’empreinte change ; ses exécutions sont silencieuses (hook `silentRun`) et ne publient rien quand il répond `RIEN`
+(`isSilentNothing`), comme les routines « silencieuses si rien ».
+
+**Hors de ce tour** (décidé, pas oublié) : dans le premier démarrage guidé, « Nouveau bot → À partir d’un modèle » et des
+permissions réduites pour un bot créé vierge. Le premier touche le formulaire de bot (équipe A) et l’écran Bots (équipe
+B) à la fois ; le second change `DEFAULT_BOT_PERMISSIONS`, donc le comportement de l’API pour tout client. L’équipe de
+départ créée par le guide part déjà avec les permissions minimales de son modèle (`BOT_TEMPLATES`).
+
+**Déjà en place dans le socle** (aucune équipe n’a à le refaire) : migration `0003_features` avec reprise des données
+(routines déjà proposées, origine des coûts déjà enregistrés, premier démarrage marqué fait s’il existe des bots) ; vie du
+worker et projection mensuelle dans `GET /api/quota` ; `purpose` / `routine_id` sur toute consommation ; plafond par
+exécution sur l’abonnement ; modèle et effort ponctuels dans `requestRun` et `dispatchUserMessage` ; clés d’origine
+(`routineId`, `reportTo`, `followupId`, `watchId`, `draftId`, `depth`) et modèle conservés par la suite automatique ;
+`rc.outputs.attachments` → `meta.attachments` ; champs `proposed`, `completionPush`, `silentIfNothing` des routines,
+`completionPush` des bots, `assignee` des tâches (création), `lastReadAt` des canaux, `revokedAt` des validations ;
+arrêt du planificateur pendant l’arrêt d’urgence ; messages `ClientEvent` validés et identifiant par connexion ;
+`realtime.send()` dans l’interface ; outil `handoff` dans son propre fichier ; `okWithImage(texte, base64, mime)` ;
+affichage des messages `reminder` et `draft`, pastille « Veille », libellés des déclencheurs et des événements d’audit ;
+`effectiveTrigger()` et `chainStartedAt()` (origine et début d’une tâche continuée), `afterRun` sur chaque état final
+avec `silent`, `attachments` et la durée de la tâche entière ; `isSilentNothing()` ; `resolveMessageTargets()` ; coût
+d’un appel ponctuel ajouté au run (`addRunUsage`) ; rotation des sessions `watch:<id>` (et de tout `<préfixe>:<id>`)
+d’après leurs exécutions ; réglages écrits sous verrou (une modification du propriétaire n’efface pas l’arrêt
+d’urgence) ; projection mensuelle comptant au moins 3 jours ; `/healthz` qui interroge la base ; `draft.updated` qui ne
+porte que l’identifiant.
+
+### 19.3 Carte des fichiers
+
+Chaque équipe ne modifie que les fichiers de sa liste et ne crée de fichiers que sous les noms indiqués (ou préfixés par le
+nom de son module). Tout autre fichier existant est **figé** pour ce tour : un besoin non couvert (champ, type, hook) se
+signale à l’architecte, qui le livre dans le socle pour tout le monde.
+
+**Figés** (personne) :
+- schéma et migrations : `apps/server/src/db/schema.ts`, `apps/server/drizzle/**` ;
+- types partagés : `packages/shared/src/{api,settings,index,models,quota,risk,computer,time,redact,mentions,cron-describe}.ts` ;
+- serveur : `apps/server/src/{config,web,worker}.ts`, `src/lib/**`, `src/services/{runs,quota,messages,channels,bots,memory,nudges,computer-state,service-status,context}.ts`,
+  `src/worker/{runner,main,scheduler,run-context,prompt,deps,heartbeat,rotate,routine-parse,approvals-exec}.ts`,
+  `src/worker/modules/{index,types}.ts`, `src/worker/tools/{index,helpers,memory,approvals,nudges}.ts`,
+  `src/web/{app,ws,deps,security,session,session-sockets}.ts`, `src/web/modules/{index,types}.ts`, `src/web/routes/auth.ts` ;
+- interface : `apps/ui/src/{App,main}.tsx`, `src/features/{index.tsx,types.ts}`, `src/lib/{ws,ws-dispatch,queries,cache,labels,api}.ts`,
+  `src/components/layout/{AppShell,IconRail,MobileTabBar}.tsx`, `src/components/layout/shell.ts`,
+  `src/components/chat/{MessageItem,SystemMessage,MessageList,ChannelHeader}.tsx`, `src/components/audit/labels.ts`,
+  `src/routes/{Home,Settings,BotDetail,Conversation}.tsx`.
+
+**Équipe A — `tracking`**
+- Modifie : `apps/server/src/worker/modules/tracking.ts`, `apps/server/src/web/modules/tracking.ts`,
+  `apps/server/src/services/{tasks,push}.ts`, `apps/server/src/web/routes/knowledge.ts`,
+  `apps/server/src/worker/tools/tasks.ts`, `apps/server/src/worker/digest.ts`, `packages/shared/src/tracking.ts`,
+  `apps/ui/src/features/tracking/**`, `apps/ui/src/lib/unread.ts`, `apps/ui/src/components/layout/ConversationList.tsx`,
+  `apps/ui/src/components/bots/{BotForm,BotSidePanels}.tsx`, `apps/ui/src/components/memory/MemoryModal.tsx`,
+  `apps/ui/src/components/settings/NotificationsSection.tsx`.
+- Crée : `apps/server/src/services/{followups,presence,reads}.ts`, `apps/server/src/worker/tools/{followups,notify}.ts`,
+  `apps/server/src/worker/followups.ts`, tests `apps/server/test/tracking-*.test.ts`, `apps/ui/test/tracking-*.test.tsx`.
+
+**Équipe B — `ops`**
+- Modifie : `apps/server/src/worker/modules/ops.ts`, `apps/server/src/web/modules/ops.ts`,
+  `apps/server/src/services/approvals.ts`, `apps/server/src/worker/{approval-flow,alerts,oneshot,compute}.ts`,
+  `apps/server/src/web/routes/{system,quota,approvals,bots}.ts`, `packages/shared/src/ops.ts`, `deploy/**`,
+  `docker-compose.yml`, `apps/server/Dockerfile`, `.env.example`, `README.md`, `apps/ui/src/features/ops/**`,
+  `apps/ui/src/routes/{Quota,Approvals,Bots,Setup}.tsx`, `apps/ui/src/components/{quota,approvals}/**`,
+  `apps/ui/src/components/layout/PausedBanner.tsx`, `apps/ui/src/lib/usage.ts`.
+- Crée : `apps/server/src/services/{health,emergency,costs}.ts`, `apps/server/src/worker/diagnostic.ts`, tests
+  `apps/server/test/ops-*.test.ts`, `apps/ui/test/ops-*.test.tsx`, `deploy/tests/*`.
+
+**Équipe C — `inputs`**
+- Modifie : `apps/server/src/worker/modules/inputs.ts`, `apps/server/src/web/modules/inputs.ts`,
+  `apps/server/src/services/computer-client.ts`, `apps/server/src/web/routes/{channels,computer}.ts`,
+  `apps/server/src/worker/tools/messaging.ts`, `packages/shared/src/inputs.ts`, `apps/computer/**`,
+  `apps/ui/src/features/inputs/**`, `apps/ui/src/components/chat/{Composer.tsx,useSendMessage.ts,ModelSelector.tsx}`,
+  `apps/ui/src/lib/models.ts`, `apps/ui/src/components/computer/**`, `apps/ui/src/sw.ts`, `apps/ui/vite.config.ts`.
+- Crée : `apps/server/src/services/attachments.ts`, `apps/server/src/worker/attachments.ts`,
+  `apps/server/src/worker/tools/attachments.ts`, tests `apps/server/test/inputs-*.test.ts`, `apps/ui/test/inputs-*.test.tsx`,
+  `apps/computer/test/upload*.test.ts`.
+
+**Équipe D — `capabilities`**
+- Modifie : `apps/server/src/worker/modules/capabilities.ts`, `apps/server/src/web/modules/capabilities.ts`,
+  `apps/server/src/worker/handoff.ts`, `apps/server/src/worker/tools/{handoff,computer,routines}.ts`,
+  `apps/server/src/services/routines.ts`, `apps/server/src/web/routes/routines.ts`, `packages/shared/src/{capabilities,loop-guard}.ts`,
+  `apps/ui/src/features/capabilities/**`, `apps/ui/src/routes/Routines.tsx`, `apps/ui/src/components/routines/**`
+  (dont le choix « Notifier à la fin » d’une routine, champ `completionPush` déjà servi par l’API).
+- Crée : `apps/server/src/services/{drafts,watches}.ts`, `apps/server/src/worker/{handoff-return,watch-check}.ts`,
+  `apps/server/src/worker/tools/{drafts,watches,web-extract}.ts`, tests `apps/server/test/capabilities-*.test.ts`,
+  `apps/ui/test/capabilities-*.test.tsx`, `packages/shared/test/capabilities.test.ts`.
+
+### 19.4 Règles de fusion
+
+- Aucune migration, aucune modification des types partagés ni des fichiers figés.
+- Tests : de nouveaux fichiers préfixés par le module ; un test existant ne se modifie que si le changement de l’équipe le
+  casse, et seulement l’assertion concernée. `pnpm -r run typecheck` et toutes les suites restent vertes à chaque fusion.
+- Documentation : chaque équipe complète **sa** section de [API.md](API.md#évolutions--contrat-des-équipes-a-à-d) (écarts
+  avec le contrat signalés « (implémentation) »), son paragraphe du § 19.2 et sa sous-section de [ETAT.md](ETAT.md).
+- Textes visibles en français, sur le ton existant ; pas de TODO, pas de bouchon, pas d’interface morte.

@@ -1,6 +1,6 @@
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { BROWSER_ACTIONS, browserActionNeedsApproval, classifyShellCommand, hostnameOf } from '@ant/shared';
+import { BROWSER_ACTIONS, browserActionNeedsApproval, browserActionTargeted, classifyShellCommand, hostnameOf } from '@ant/shared';
 import { audit, botActor } from '../../lib/audit';
 import { getComputerState, recordComputerAction } from '../../services/computer-state';
 import { hasActiveGrant, requireApproval } from '../approval-flow';
@@ -51,7 +51,7 @@ export function computerTools(rc: RunContext) {
           command: z.string().min(1).max(20_000),
           cwd: z.string().optional().describe('Dossier relatif à /workspace'),
           // Node's fetch waits at most 300 s for response headers: longer jobs go to the background.
-          timeout_sec: z.number().int().min(1).max(280).optional().describe('Défaut 120 s, maximum 280 s. Pour plus long, lance en arrière-plan (nohup … > /workspace/log.txt &) puis consulte le journal.'),
+          timeout_sec: z.number().int().min(1).max(280).optional().describe('Défaut 120 s, maximum 280 s. Pour plus long, lance en arrière-plan (nohup … > /workspace/log.txt 2>&1 &) puis consulte le journal.'),
         },
         async (args) =>
           guarded(async () => {
@@ -175,10 +175,28 @@ Sur les sites sensibles (paiement, messageries, réseaux sociaux, comptes), les 
               const state = await computer.browser({ action: 'screenshot', screenshot: false });
               const needs = browserActionNeedsApproval(args.action, state.url, rc.settings.sensitiveDomains, args.key);
               if (needs && !(await hasActiveGrant(rc, state.url))) {
-                // A key sent to an element (Space on a button…) shows which one, like a click.
-                const targeted = args.action === 'click' || Boolean(args.ref || args.selector);
-                const target = targeted ? await computer.inspect({ ref: args.ref, selector: args.selector }) : null;
-                const label = target?.elementLabel ?? args.ref ?? args.selector ?? '?';
+                // Empty strings (models fill optional parameters with them) mean « no target ».
+                const ref = args.ref || undefined;
+                const selector = args.selector || undefined;
+                // A key sent to an element (Space on a button…) shows which one, like a click. Stored on the card:
+                // the executor never re-derives it (approvals-exec.ts).
+                const targeted = browserActionTargeted(args.action, ref, selector);
+                const target = targeted ? await computer.inspect({ ref, selector }) : null;
+                // The approved action is replayed on this exact node (its pin), after checking its label: without
+                // both, the card could never be executed.
+                if (target && (!target.pin || target.elementLabel === null)) {
+                  const what = ref
+                    ? `la référence « ${ref} » (refais un « read » : les références changent à chaque lecture)`
+                    : selector
+                      ? `le sélecteur « ${selector} » (refais un « read » et vise l’élément par sa référence)`
+                      : 'cette cible';
+                  return fail(
+                    target.pin
+                      ? `L’élément visé par ${what} n’a pas pu être identifié (la page changeait peut-être). Refais un « read », puis recommence.`
+                      : `Aucun élément trouvé pour ${what}.`,
+                  );
+                }
+                const label = target?.elementLabel ?? ref ?? selector ?? '?';
                 const what =
                   args.action === 'click'
                     ? `Cliquer sur « ${label} »`
@@ -187,7 +205,15 @@ Sur les sites sensibles (paiement, messageries, réseaux sociaux, comptes), les 
                   category: 'navigateur_sensible',
                   tool: 'browser',
                   summary: `${what} — ${state.url}\n\nPage : ${state.title}`,
-                  payload: { ...args, expectedUrl: state.url, expectedLabel: target?.elementLabel ?? null },
+                  payload: {
+                    ...args,
+                    ref,
+                    selector,
+                    targeted,
+                    expectedUrl: state.url,
+                    expectedLabel: target?.elementLabel ?? null,
+                    pin: target?.pin ?? null,
+                  },
                   screenshotPng: target?.screenshotPng ?? null,
                 });
                 return ok(text);

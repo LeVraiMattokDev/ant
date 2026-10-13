@@ -41,7 +41,7 @@ export function NewChannelModal({ open, onClose }: { open: boolean; onClose: () 
     <Modal
       open={open}
       onClose={onClose}
-      title="Nouveau canal"
+      title="Nouvelle équipe"
       footer={
         <>
           <button type="button" className="btn" onClick={onClose}>
@@ -49,7 +49,7 @@ export function NewChannelModal({ open, onClose }: { open: boolean; onClose: () 
           </button>
           <button type="submit" form="new-channel" className="btn btn-primary" disabled={!name.trim() || !botIds.length || create.isPending}>
             {create.isPending && <Spinner className="size-4 text-accent-fg" />}
-            Créer le canal
+            Créer l’équipe
           </button>
         </>
       }
@@ -59,13 +59,13 @@ export function NewChannelModal({ open, onClose }: { open: boolean; onClose: () 
         <Field label="Nom" htmlFor="ch-name">
           <input id="ch-name" data-autofocus className="input" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} placeholder="lancement-site" required />
         </Field>
-        <Field label="Sujet" htmlFor="ch-topic" help="Une phrase qui dit aux bots à quoi sert ce canal.">
+        <Field label="Sujet" htmlFor="ch-topic" help="Une phrase qui dit aux bots à quoi sert cette équipe.">
           <input id="ch-topic" className="input" maxLength={300} value={topic} onChange={(e) => setTopic(e.target.value)} />
         </Field>
         <div>
           <div className="label">Bots membres</div>
           <BotPicker bots={bots ?? []} value={botIds} onChange={setBotIds} />
-          <div className="help">Sans @mention, c’est le premier bot du canal qui répond.</div>
+          <div className="help">Sans @mention, c’est le premier bot de l’équipe qui répond.</div>
         </div>
       </form>
     </Modal>

@@ -91,14 +91,24 @@ async function takeChallenge(deps: WebDeps, req: FastifyRequest, reply: FastifyR
   return row.challenge;
 }
 
+export const ENCRYPTION_KEY_MISMATCH =
+  'Code impossible à vérifier : ENCRYPTION_KEY n’est pas celle avec laquelle ton code a été enregistré (base restaurée avec un autre .env ?). Connecte-toi avec un code de secours ou une passkey, puis remets l’ancienne ENCRYPTION_KEY dans .env pour retrouver les codes de ton application.';
+
 /**
  * Verifies a TOTP code and consumes its time step: a code (or an older one) cannot be replayed while it is
  * still inside the validity window.
  */
 async function consumeTotp(deps: WebDeps, secretEnc: string, code: string, now = Date.now()): Promise<boolean> {
+  let secret: string;
+  try {
+    secret = decrypt(secretEnc, deps.cfg.ENCRYPTION_KEY);
+  } catch {
+    // Not a wrong code: the secret was encrypted with another key (database restored without its .env).
+    throw new HttpError(409, 'encryption_key_mismatch', ENCRYPTION_KEY_MISMATCH);
+  }
   const otp = authenticator.clone();
   otp.options = { epoch: now };
-  const delta = otp.checkDelta(code, decrypt(secretEnc, deps.cfg.ENCRYPTION_KEY));
+  const delta = otp.checkDelta(code, secret);
   if (delta === null) return false;
   const step = Math.floor(now / 1000 / TOTP_STEP_SECONDS) + delta;
   return claimTotpStep(deps.ctx, step);
@@ -193,7 +203,11 @@ export async function authRoutes(app: FastifyInstance, deps: WebDeps): Promise<v
     if (existing?.totpEnabled) throw new HttpError(409, 'already_setup', 'Ant est déjà configuré.');
     const attempt = await reserve(req, 'setup', SETUP_SCOPE);
     if (!deps.setupToken.value || !safeEqual(body.setupToken.trim(), deps.setupToken.value)) {
-      throw new HttpError(403, 'invalid_setup_token', 'Jeton d’initialisation invalide (voir les journaux du conteneur web).');
+      throw new HttpError(
+        403,
+        'invalid_setup_token',
+        'Jeton d’initialisation invalide (valeur de SETUP_TOKEN dans .env ; si elle est vide, voir les journaux du conteneur web).',
+      );
     }
     // The token is right: a weak password below is not a failed attempt.
     await settleAttempt(ctx, attempt, true);

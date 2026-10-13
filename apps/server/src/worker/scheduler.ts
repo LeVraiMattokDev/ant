@@ -1,12 +1,14 @@
-import { and, isNotNull, lt, ne } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, lt, ne, sql as dsql } from 'drizzle-orm';
 import { localDateKey, localMinutes, parseHHMM, type AppSettings } from '@ant/shared';
-import { approvals, authChallenges, authSessions, budgetAlerts, loginAttempts, subscriptionEvents } from '../db/schema';
+import { approvals, authChallenges, authSessions, budgetAlerts, jobs, loginAttempts, runs, subscriptionEvents } from '../db/schema';
 import { audit } from '../lib/audit';
+import { runToDTO } from '../lib/dto';
+import { publish } from '../lib/events';
 import { enqueue, purgeOldJobs } from '../lib/jobs';
 import { getSettings } from '../lib/settings';
 import { expireApprovals } from '../services/approvals';
 import { activeBots } from '../services/bots';
-import { createMessage } from '../services/messages';
+import { createMessage, updateMessage } from '../services/messages';
 import { notifyOwner, pushHeldByQuietHours } from '../services/push';
 import { expireUsageWindows, getComputeState, liftExpiredSubscriptionLimit } from '../services/quota';
 import { advanceRoutine, dueRoutines, routineThreadKey } from '../services/routines';
@@ -15,32 +17,84 @@ import { checkBudgetAlerts } from './alerts';
 import { closeStrandedApprovals } from './approvals-exec';
 import type { WorkerDeps } from './deps';
 import { heartbeatDue } from './heartbeat';
+import { runMaintenanceHooks, runSchedulerHooks } from './modules';
+import { afterRunClosed } from './runner';
 
 const DAY_MS = 86_400_000;
 
-/** One scheduler pass (every 30 s). Safe when passes overlap: job dedupe keys and atomic claims (routines, restore notice, approvals). */
+/**
+ * One scheduler pass (every 30 s). Safe when passes overlap: job dedupe keys and atomic claims (routines, restore notice, approvals).
+ * Then the feature modules' own passes (worker/modules), each isolated from the others' errors.
+ */
 export async function schedulerTick(deps: WorkerDeps, now = new Date()): Promise<void> {
   const settings = await getSettings(deps.ctx.db);
-  await scheduleHeartbeats(deps, settings, now);
-  await fireRoutines(deps, now);
-  await scheduleDigest(deps, settings, now);
+  // « Tout arrêter » : no new autonomous work while the emergency stop is engaged. A routine due meanwhile fires once
+  // at the first pass after the resume (like after a downtime); approvals still expire and the subscription is restored.
+  if (!settings.emergencyStop) {
+    await scheduleHeartbeats(deps, settings, now);
+    await fireRoutines(deps, now);
+    await scheduleDigest(deps, settings, now);
+  }
   await handleExpiredApprovals(deps, now);
   await closeStrandedApprovals(deps, now);
   await restoreSubscription(deps, settings, now);
+  await runSchedulerHooks(deps, settings, now);
 }
 
 async function scheduleHeartbeats(deps: WorkerDeps, settings: AppSettings, now: Date): Promise<void> {
   for (const bot of await activeBots(deps.ctx)) {
-    if (!heartbeatDue(bot, settings, now)) continue;
-    const slot = Math.floor(now.getTime() / (bot.heartbeatIntervalMin * 60_000));
-    await enqueue(deps.ctx.db, 'heartbeat', { botId: bot.id }, { dedupeKey: `hb:${bot.id}:${slot}`, maxAttempts: 1 });
+    // One bot's bad data must not keep the others (and the routines, digest, approvals after them) from running.
+    try {
+      if (!heartbeatDue(bot, settings, now)) continue;
+      const slot = Math.floor(now.getTime() / (bot.heartbeatIntervalMin * 60_000));
+      await enqueue(deps.ctx.db, 'heartbeat', { botId: bot.id }, { dedupeKey: `hb:${bot.id}:${slot}`, maxAttempts: 1 });
+    } catch (err) {
+      deps.log.error({ err, botId: bot.id }, 'heartbeat scheduling failed for this bot');
+    }
   }
+}
+
+export const SUPERSEDED_OCCURRENCE = 'remplacée par une occurrence plus récente de la routine';
+
+/**
+ * Cancels the scheduled occurrences of a routine still waiting (queued, or paused for lack of compute) when a newer
+ * one fires: at most one waits at a time, instead of a pile that would all run at once when compute comes back.
+ * A run whose job a worker is executing right now is left alone (it is starting), as are runs the owner started.
+ */
+export async function supersedeWaitingOccurrences(deps: WorkerDeps, routineId: string, now = new Date()): Promise<number> {
+  const { ctx } = deps;
+  const cancelled = await ctx.db
+    .update(runs)
+    .set({ status: 'cancelled', error: SUPERSEDED_OCCURRENCE, finishedAt: now, activity: null })
+    .where(
+      and(
+        inArray(runs.status, ['queued', 'paused']),
+        eq(runs.trigger, 'routine'),
+        eq(runs.origin, 'autonomous'),
+        dsql`${runs.payload}->>'routineId' = ${routineId}`,
+        dsql`not exists (select 1 from ${jobs} j where j.kind = 'bot.run' and j.status = 'running' and j.payload->>'runId' = ${runs.id}::text)`,
+      ),
+    )
+    .returning();
+  for (const run of cancelled) {
+    // The ⏸️ notice of a paused occurrence no longer announces a retry.
+    if (typeof run.payload.pauseMessageId === 'string') {
+      await updateMessage(ctx, run.payload.pauseMessageId, { content: `⏹️ Occurrence de la routine non exécutée : ${SUPERSEDED_OCCURRENCE}.` }).catch(() => null);
+    }
+    await publish(ctx.sql, { type: 'run.updated', run: runToDTO(run) });
+    await publish(ctx.sql, { type: 'bot.updated', botId: run.botId });
+    await audit(ctx.db, { actor: 'system', event: 'run.finished', runId: run.id, detail: { trigger: run.trigger, reason: SUPERSEDED_OCCURRENCE, routineId }, outcome: 'cancelled' });
+    // Its job may wait hours (paused run): the feature modules learn the final state now.
+    await afterRunClosed(deps, run);
+  }
+  return cancelled.length;
 }
 
 async function fireRoutines(deps: WorkerDeps, now: Date): Promise<void> {
   for (const routine of await dueRoutines(deps.ctx, now)) {
     // Atomic claim: an overlapping pass that read the same occurrence fires nothing.
     if (!(await advanceRoutine(deps.ctx, routine, now))) continue;
+    await supersedeWaitingOccurrences(deps, routine.id, now);
     const run = await requestRun(deps.ctx, {
       botId: routine.botId,
       channelId: routine.channelId,
@@ -123,6 +177,7 @@ export async function maintenance(deps: WorkerDeps, now = new Date()): Promise<v
   const settings = await getSettings(db);
   await checkBudgetAlerts(deps, settings, now);
   await tokenExpiryReminder(deps, settings, now);
+  await runMaintenanceHooks(deps, settings, now);
 }
 
 /** Reminder steps (days left) before the subscription token expires: each one is sent once per token. */

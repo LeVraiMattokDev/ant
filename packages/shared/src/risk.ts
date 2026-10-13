@@ -150,3 +150,12 @@ export function browserActionNeedsApproval(action: BrowserAction, url: string, d
   if (action === 'press') return !isNavigationKey(key);
   return false;
 }
+
+/**
+ * Whether a browser action is aimed at one element (a click, or a key sent to a ref or selector): its approval card
+ * shows that element and the approved action is replayed on it (pin + label). Empty strings are no target — models
+ * fill optional parameters with them. The tool decides it once and stores it on the card; the executor reads it.
+ */
+export function browserActionTargeted(action: string, ref?: string | null, selector?: string | null): boolean {
+  return action === 'click' || (action === 'press' && Boolean(ref || selector));
+}

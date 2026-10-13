@@ -1,19 +1,23 @@
 import { and, eq, gte, lte, sql as dsql } from 'drizzle-orm';
 import {
+  WORKER_ALIVE_MS,
   apiRemainingUsd,
   localDateKey,
   localMonthKey,
+  localParts,
   normaliseUtilisation,
   round2,
   type AppSettings,
   type ComputeSource,
   type QuotaStatusDTO,
   type SubscriptionHealth,
+  type UsagePurpose,
   type UsageRowDTO,
 } from '@ant/shared';
 import { computeState, runModelUsage, subscriptionEvents } from '../db/schema';
 import { publish } from '../lib/events';
 import type { Ctx } from './context';
+import { getServiceStatus } from './service-status';
 
 export type ComputeStateRow = typeof computeState.$inferSelect;
 
@@ -146,6 +150,9 @@ export function effectiveUtilisation(state: ComputeStateRow, now = new Date()): 
 export interface UsageRecord {
   runId: string | null;
   botId: string | null;
+  /** What the call was for: the run's trigger, or the one-shot's purpose. */
+  purpose?: UsagePurpose | null;
+  routineId?: string | null;
   source: ComputeSource;
   model: string;
   inputTokens: number;
@@ -155,6 +162,20 @@ export interface UsageRecord {
   costUsd: number;
 }
 
+/** Totals of usage records: what a run adds to its own counters (cost, tokens). */
+export function sumUsage(usage: readonly UsageRecord[]): Pick<UsageRecord, 'costUsd' | 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'> {
+  const sum = (k: 'costUsd' | 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens') => usage.reduce((acc, u) => acc + (Number(u[k]) || 0), 0);
+  return {
+    costUsd: sum('costUsd'),
+    inputTokens: sum('inputTokens'),
+    outputTokens: sum('outputTokens'),
+    cacheReadTokens: sum('cacheReadTokens'),
+    cacheWriteTokens: sum('cacheWriteTokens'),
+  };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function recordUsage(ctx: Ctx, records: UsageRecord[], timezone: string, now = new Date()): Promise<void> {
   const rows = records.filter((r) => r.inputTokens + r.outputTokens + r.cacheReadTokens + r.cacheWriteTokens > 0 || r.costUsd > 0);
   if (rows.length === 0) return;
@@ -162,6 +183,9 @@ export async function recordUsage(ctx: Ctx, records: UsageRecord[], timezone: st
     rows.map((r) => ({
       runId: r.runId,
       botId: r.botId,
+      purpose: r.purpose ?? null,
+      // A malformed id would make the whole insert fail, and the spend would be counted nowhere.
+      routineId: r.routineId && UUID_RE.test(r.routineId) ? r.routineId : null,
       day: localDateKey(now, timezone),
       month: localMonthKey(now, timezone),
       model: r.model,
@@ -242,8 +266,24 @@ export function subscriptionHealth(state: ComputeStateRow, settings: AppSettings
   return 'ok';
 }
 
+/**
+ * Elapsed days counted at least by the monthly projection: one $2 run at 01:00 on the 1st must not project
+ * $1,500 (and use up the month's single projection alert). Until then the projection is « spent ÷ 3 × days ».
+ */
+export const FORECAST_MIN_ELAPSED_DAYS = 3;
+
+/** Linear projection of the month's API spend (local calendar month of `timezone`). */
+export function forecastMonthUsd(spentMonthUsd: number, timezone: string, now = new Date()): number {
+  const p = localParts(now, timezone);
+  const daysInMonth = new Date(Date.UTC(p.year, p.month, 0)).getUTCDate();
+  // Elapsed fraction of the month, counting the current day pro rata.
+  const elapsedDays = Math.max(p.day - 1 + (p.hour * 60 + p.minute) / 1440, FORECAST_MIN_ELAPSED_DAYS);
+  return round2((spentMonthUsd / elapsedDays) * daysInMonth);
+}
+
 export async function quotaStatus(ctx: Ctx, settings: AppSettings, now = new Date()): Promise<QuotaStatusDTO> {
   const state = await getComputeState(ctx);
+  const worker = await getServiceStatus(ctx, 'worker');
   const spend = await apiSpend(ctx, settings.timezone, null, now);
   const sub = await subscriptionUsageToday(ctx, settings.timezone, now);
   const util = effectiveUtilisation(state, now);
@@ -271,9 +311,14 @@ export async function quotaStatus(ctx: Ctx, settings: AppSettings, now = new Dat
       spentMonthUsd: spend.monthUsd,
       dailyCapUsd: settings.apiDailyCapUsd,
       monthlyCapUsd: settings.apiMonthlyCapUsd,
+      forecastMonthUsd: forecastMonthUsd(spend.monthUsd, settings.timezone, now),
     },
     allPaused: Boolean(state.allPausedReason),
     pausedReason: state.allPausedReason ?? null,
+    worker: {
+      lastSeenAt: worker?.seenAt.toISOString() ?? null,
+      alive: worker !== null && now.getTime() - worker.seenAt.getTime() < WORKER_ALIVE_MS,
+    },
   };
 }
 

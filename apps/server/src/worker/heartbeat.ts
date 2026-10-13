@@ -129,6 +129,7 @@ ${previous}`;
 
   const triage = await oneShot<TriageResult>(deps, settings, {
     label: `heartbeat-triage:${bot.slug}`,
+    purpose: 'heartbeat_triage',
     model: TRIAGE_MODEL,
     effort: TRIAGE_EFFORT,
     system:

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { describeCron } from '@ant/shared';
 import { audit, botActor } from '../../lib/audit';
 import { createMessage } from '../../services/messages';
-import { createRoutine } from '../../services/routines';
+import { canPostRoutine, createRoutine } from '../../services/routines';
 import type { RunContext } from '../run-context';
 import { guarded, ok } from './helpers';
 
@@ -20,11 +20,15 @@ export function routineTools(rc: RunContext) {
       },
       async (args) =>
         guarded(async () => {
+          // From a conversation where its routines cannot post (another bot's DM reached by a handoff, a group it left):
+          // its own private conversation.
+          const here = rc.run.channelId;
+          const channelId = here && (await canPostRoutine(rc.deps.ctx, rc.bot.id, here)) ? here : null;
           const routine = await createRoutine(
             rc.deps.ctx,
             {
               botId: rc.bot.id,
-              channelId: rc.run.channelId,
+              channelId,
               sourceText: args.source_text,
               cron: args.cron,
               instruction: args.instruction,
@@ -32,6 +36,7 @@ export function routineTools(rc: RunContext) {
               enabled: false,
             },
             rc.settings.timezone,
+            { proposed: true },
           );
           if (rc.run.channelId) {
             await createMessage(rc.deps.ctx, {

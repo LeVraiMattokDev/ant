@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Check, Copy, Link2, MessageSquareReply, MessagesSquare, MoreHorizontal } from 'lucide-react';
 import { EFFORT_LABELS, MODEL_LABELS, type BotDTO, type MessageDTO } from '@ant/shared';
+import { FeatureMessageExtras, FeatureMessageMenuItems } from '../../features';
 import { copyText } from '../../lib/clipboard';
 import { useMediaQuery } from '../../lib/hooks';
 import { COMPUTE_SOURCE_LABELS } from '../../lib/labels';
@@ -17,6 +18,7 @@ export const KIND_CHIPS: Partial<Record<NonNullable<MessageDTO['meta']['kind']>,
   nudge: 'Relance',
   digest: 'Résumé quotidien',
   routine: 'Routine',
+  watch: 'Veille',
 };
 
 /** Model, effort, compute source and (API only) cost of a bot reply. */
@@ -150,6 +152,7 @@ function MessageActions({ message, threadLink, className }: { message: MessageDT
             >
               Copier le lien
             </MenuItem>
+            <FeatureMessageMenuItems message={message} close={close} />
           </>
         )}
       </Popover>
@@ -189,6 +192,7 @@ export const MessageItem = memo(function MessageItem({ message, bot, bots, group
     return (
       <div id={`msg-${message.id}`} className={cx('flex flex-col items-center px-4 py-2 md:px-6', highlighted && 'highlight-flash rounded-[14px]')}>
         <SystemMessage message={message} bots={bots} />
+        <FeatureMessageExtras message={message} />
         {threadLink && message.replyCount > 0 && <ThreadLink to={threadLink} message={message} />}
       </div>
     );
@@ -211,6 +215,7 @@ export const MessageItem = memo(function MessageItem({ message, bot, bots, group
           </div>
         </div>
         {error}
+        <FeatureMessageExtras message={message} />
         <time dateTime={message.createdAt} className="mt-1 pr-2 text-[11px] text-subtle opacity-0 transition-opacity group-hover:opacity-100">
           {formatShort(message.createdAt)}
         </time>
@@ -253,6 +258,7 @@ export const MessageItem = memo(function MessageItem({ message, bot, bots, group
         </div>
         {!streaming && <MessageActions message={message} threadLink={threadLink} className="sticky top-2 mt-1" />}
       </div>
+      {!streaming && <FeatureMessageExtras message={message} />}
       {!streaming && (
         <MessageChips
           message={message}

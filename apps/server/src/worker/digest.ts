@@ -61,6 +61,7 @@ export async function runDigest(deps: WorkerDeps, now = new Date()): Promise<str
 
   const res = await oneShot<{ markdown: string }>(deps, settings, {
     label: 'daily-digest',
+    purpose: 'digest',
     model: TRIAGE_MODEL,
     effort: TRIAGE_EFFORT,
     system: `Tu es ${author.name}, et tu rédiges le résumé quotidien d’Ant pour son propriétaire. Français, Markdown, 250 mots maximum. Commence par ce qui demande son attention (validations en attente, tâches en retard), puis ce qui a été fait, puis la consommation. Pas de formule creuse.`,

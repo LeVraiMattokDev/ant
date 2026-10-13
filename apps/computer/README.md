@@ -23,7 +23,11 @@ terminal partagé (tmux). Le service Node écoute sur le port **7000** et n'est 
   accès est le pont WebSocket `/vnc`, authentifié par le jeton (et proxifié par `web` derrière la
   connexion utilisateur). Test : `test/entrypoint.test.ts` (aucun port TCP en écoute pour x11vnc).
 - Utilisateur non-root `agent` (uid 1000). Durcissement prévu par le compose : `cap_drop: ALL`,
-  `no-new-privileges`, racine en lecture seule sauf `/workspace`, `/tmp`, profil navigateur.
+  `no-new-privileges`, racine en lecture seule (`read_only`). Seuls `/workspace` et le profil du navigateur
+  (`/home/agent/.ant-browser`) sont des volumes, donc conservés. `/tmp` (768 Mo) et le dossier personnel `/home/agent`
+  (512 Mo) sont des tmpfs pris sur la mémoire du conteneur et vidés à chaque redémarrage : ce qu'un agent y installe ou
+  modifie (`pip install --user`, `~/.bashrc`) disparaît. Le cache de pip est désactivé, celui de npm est dans
+  `/workspace/.cache/npm`, et les gros outils (environnement virtuel Python, `node_modules`) vont dans `/workspace`.
 
 Limite connue : le service et les commandes des agents tournent sous le même uid ; un agent peut
 donc lire l'environnement initial des processus du conteneur (`/proc/<pid>/environ`). Le jeton ne
@@ -116,7 +120,8 @@ docker build -f apps/computer/Dockerfile -t ant-computer .   # depuis la racine 
 docker run --rm -e COMPUTER_RPC_TOKEN=... -p 127.0.0.1:7000:7000 ant-computer
 ```
 
-`entrypoint.sh` lance Xvfb (`:99`, 1280×800), openbox et x11vnc (socket unix `VNC_SOCKET` uniquement,
+`entrypoint.sh` remet dans le dossier personnel (tmpfs vide) les fichiers de `/etc/skel` (`.bashrc`, `.profile`) sans
+remplacer ceux déjà présents, lance Xvfb (`:99`, 1280×800), openbox et x11vnc (socket unix `VNC_SOCKET` uniquement,
 aucun port TCP), les relance s'ils s'arrêtent, puis exécute le service Node. Sourcé (`source
 entrypoint.sh`), il ne fait que définir ses fonctions : c'est ainsi que les tests lancent `run_x11vnc`.
 `apps/computer/Dockerfile.dockerignore` restreint le contexte.

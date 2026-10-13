@@ -2,17 +2,32 @@ import { and, eq, lt, sql as dsql } from 'drizzle-orm';
 import type { Db, Sql } from '../db/client';
 import { jobs } from '../db/schema';
 
-export type JobKind =
-  | 'bot.run'
-  | 'heartbeat'
-  | 'routine.fire'
-  | 'digest'
-  | 'approval.execute'
-  | 'approval.expire'
-  | 'subscription.reset'
-  | 'session.rotate'
-  | 'routine.parse'
-  | 'maintenance';
+/**
+ * Every job kind, as the keys of this interface. The feature modules' kinds are declared here up front (their
+ * handlers live in worker/modules/<module>.ts); a kind needed later is declared from the module's own file by
+ * augmentation, without editing this one:
+ *   declare module '../../lib/jobs' { interface JobKinds { 'tracking.something': true } }
+ */
+export interface JobKinds {
+  'bot.run': true;
+  heartbeat: true;
+  'routine.fire': true;
+  digest: true;
+  'approval.execute': true;
+  'approval.expire': true;
+  'subscription.reset': true;
+  'session.rotate': true;
+  'routine.parse': true;
+  maintenance: true;
+  /** Notifications & suivi: fires one due followup ({ followupId }). */
+  'followup.fire': true;
+  /** Santé: connection test of each configured compute source ({}), result in service_status 'diagnostic'. */
+  diagnostic: true;
+  /** Veilles: checks one watch ({ watchId, manual? }) inside the computer. */
+  'watch.check': true;
+}
+
+export type JobKind = keyof JobKinds;
 
 export interface EnqueueOptions {
   runAt?: Date;

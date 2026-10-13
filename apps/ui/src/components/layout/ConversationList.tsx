@@ -7,7 +7,7 @@ import { patch } from '../../lib/api';
 import { formatRelative } from '../../lib/format';
 import { useNow, useStoredState } from '../../lib/hooks';
 import { botLiveState, formatListTime, matchesQuery, previewText } from '../../lib/preview';
-import { qk, useActiveRuns, useBots, useChannels, useRoutines } from '../../lib/queries';
+import { qk, useActiveRuns, useBots, useChannels, useRoutines, useWorkerDown } from '../../lib/queries';
 import { toast } from '../../lib/toast';
 import { isUnread, useReadMarks } from '../../lib/unread';
 import { BotAvatar, GroupAvatar } from '../BotAvatar';
@@ -103,6 +103,8 @@ function AgentsTab({ query }: { query: string }) {
   const { data: bots, isPending: botsPending } = useBots();
   const { data: channels } = useChannels();
   const { data: runs } = useActiveRuns();
+  // A queued run of a stopped worker waits for it, not for a free slot.
+  const workerDown = useWorkerDown();
   const marks = useReadMarks();
   const { openNewChannel } = useShell();
   const { pathname } = useLocation();
@@ -195,7 +197,7 @@ function AgentsTab({ query }: { query: string }) {
                 channel={channel}
                 bots={botMap}
                 unread={channelId !== current && isUnread(channel?.lastMessageAt ?? null, channelId, marks)}
-                live={botLiveState(b, runs, channelId)}
+                live={botLiveState(b, runs, channelId, workerDown)}
               />
             );
           })}
@@ -205,8 +207,8 @@ function AgentsTab({ query }: { query: string }) {
   );
 }
 
-/** Same rule as the Routines page: flagged by the server, or (older server) disabled and never run. */
-const isProposal = (r: RoutineDTO) => !r.enabled && (r.proposed ?? !r.lastRunAt);
+/** Same rule as the Routines page: a bot's proposal, flagged by the server until the owner enables it. */
+const isProposal = (r: RoutineDTO) => !r.enabled && r.proposed;
 
 function RoutineItem({ routine, bot }: { routine: RoutineDTO; bot: BotDTO | undefined }) {
   const qc = useQueryClient();

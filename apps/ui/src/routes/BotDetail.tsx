@@ -12,6 +12,7 @@ import { useConfirm } from '../components/Modal';
 import { EmptyState, ErrorBlock, LoadingBlock, PageHeader, Spinner } from '../components/ui';
 import { BotStatus } from './Bots';
 import { BotAvatar } from '../components/BotAvatar';
+import { FeatureBotPanels } from '../features';
 
 export function BotDetailPage() {
   const { botId } = useParams();
@@ -131,6 +132,7 @@ export function BotDetailPage() {
               <TasksPanel bot={bot} />
               <NudgesPanel bot={bot} />
               <RunsPanel bot={bot} />
+              <FeatureBotPanels bot={bot} />
             </aside>
           )}
         </div>

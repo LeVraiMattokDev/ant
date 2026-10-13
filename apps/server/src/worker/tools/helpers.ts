@@ -8,11 +8,11 @@ export function fail(text: string): CallToolResult {
   return { content: [{ type: 'text', text }], isError: true };
 }
 
-export function okWithImage(text: string, pngBase64: string): CallToolResult {
+export function okWithImage(text: string, base64: string, mimeType = 'image/png'): CallToolResult {
   return {
     content: [
       { type: 'text', text },
-      { type: 'image', data: pngBase64, mimeType: 'image/png' },
+      { type: 'image', data: base64, mimeType },
     ],
   };
 }

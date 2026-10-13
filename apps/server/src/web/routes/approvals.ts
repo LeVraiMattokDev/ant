@@ -11,6 +11,7 @@ import { requestRun } from '../../services/runs';
 import type { WebDeps } from '../deps';
 
 const STATUSES: ApprovalStatus[] = ['pending', 'approved', 'rejected', 'expired', 'executed', 'failed'];
+const UUID = z.string().uuid();
 
 export async function approvalRoutes(app: FastifyInstance, deps: WebDeps): Promise<void> {
   const { ctx } = deps;
@@ -18,6 +19,12 @@ export async function approvalRoutes(app: FastifyInstance, deps: WebDeps): Promi
   app.get<{ Querystring: { status?: string } }>('/api/approvals', async (req) => {
     const statuses = (req.query.status ?? '').split(',').filter((s): s is ApprovalStatus => (STATUSES as string[]).includes(s));
     return listApprovals(ctx, statuses.length ? statuses : undefined);
+  });
+
+  // One approval, whatever its age (the list stops at the newest 200): a card or notification opened later.
+  app.get<{ Params: { id: string } }>('/api/approvals/:id', async (req) => {
+    if (!UUID.safeParse(req.params.id).success) throw new HttpError(404, 'not_found', 'Validation introuvable.');
+    return approvalToDTO(await getApproval(ctx, req.params.id));
   });
 
   app.get<{ Params: { id: string } }>('/api/approvals/:id/screenshot', async (req, reply) => {

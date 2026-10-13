@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { hostnameOf, type BrowserRequest } from '@ant/shared';
+import { browserActionTargeted, hostnameOf, type BrowserRequest } from '@ant/shared';
 import { bots } from '../db/schema';
 import { audit, botActor } from '../lib/audit';
 import { getSettings } from '../lib/settings';
@@ -56,16 +56,27 @@ export async function executeApproval(deps: WorkerDeps, approvalId: string): Pro
       if (hostnameOf(current.url) !== hostnameOf(expected)) {
         throw new Error(`le navigateur n’est plus sur ${hostnameOf(expected)} (page actuelle : ${current.url}) — action non exécutée`);
       }
-      if (p.action === 'click' && typeof p.expectedLabel === 'string') {
-        const target = await computer.inspect({ ref: typeof p.ref === 'string' ? p.ref : undefined, selector: typeof p.selector === 'string' ? p.selector : undefined });
-        if ((target.elementLabel ?? '') !== p.expectedLabel) {
-          throw new Error(`l’élément ciblé a changé (« ${target.elementLabel ?? '?'} » au lieu de « ${p.expectedLabel} ») — action non exécutée`);
+      // An action aimed at an element (a click, a key sent to a ref or selector) runs on the very node shown on the
+      // card, through the pin taken when the approval was requested: a ref may have been given to another element by
+      // a later `read`. Without a pin or a label, nothing vouches for the target. The tool stored whether the action
+      // is targeted; cards made before that are judged by the same rule (empty ref or selector = no target).
+      const ref = typeof p.ref === 'string' && p.ref ? p.ref : undefined;
+      const selector = typeof p.selector === 'string' && p.selector ? p.selector : undefined;
+      const targeted = typeof p.targeted === 'boolean' ? p.targeted : browserActionTargeted(String(p.action), ref, selector);
+      let pin: string | undefined;
+      if (targeted) {
+        if (typeof p.pin !== 'string' || typeof p.expectedLabel !== 'string') {
+          throw new Error('élément non identifié lors de la demande — action non exécutée');
         }
+        const target = await computer.inspect({ pin: p.pin });
+        if ((target.elementLabel ?? '') !== p.expectedLabel) {
+          throw new Error(`l’élément ciblé a changé (« ${target.elementLabel ?? 'introuvable'} » au lieu de « ${p.expectedLabel} ») — action non exécutée`);
+        }
+        pin = p.pin;
       }
       const req: BrowserRequest = {
         action: p.action as BrowserRequest['action'],
-        ref: typeof p.ref === 'string' ? p.ref : undefined,
-        selector: typeof p.selector === 'string' ? p.selector : undefined,
+        ...(pin !== undefined ? { pin } : { ref, selector }),
         text: typeof p.text === 'string' ? p.text : undefined,
         key: typeof p.key === 'string' ? p.key : undefined,
       };

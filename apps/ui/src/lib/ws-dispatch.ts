@@ -1,6 +1,7 @@
 /** Applies a `ServerEvent` to the TanStack Query cache. Kept free of WebSocket concerns so it can be unit-tested. */
 import type { QueryClient } from '@tanstack/react-query';
 import type { ApprovalDTO, ChannelDTO, NudgeDTO, RunDTO, ServerEvent } from '@ant/shared';
+import { dispatchFeatureEvent } from '../features';
 import {
   appendDeltaToPages,
   appendDeltaToThread,
@@ -87,6 +88,12 @@ function applyDelta(qc: QueryClient, event: Extract<ServerEvent, { type: 'messag
 }
 
 export function dispatchServerEvent(qc: QueryClient, event: ServerEvent, hooks: DispatchHooks = {}): void {
+  applyCoreEvent(qc, event, hooks);
+  // Feature modules (features/*): the event types added for them are only handled there.
+  dispatchFeatureEvent(qc, event);
+}
+
+function applyCoreEvent(qc: QueryClient, event: ServerEvent, hooks: DispatchHooks): void {
   switch (event.type) {
     case 'message.created': {
       const m = event.message;

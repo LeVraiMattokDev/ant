@@ -43,6 +43,19 @@ run_x11vnc() {
   x11vnc -display "$DISPLAY" -forever -shared -rfbport 0 -no6 -localhost -unixsock "$VNC_SOCKET" -nopw -quiet -noxdamage
 }
 
+# Le dossier personnel est un tmpfs vide à chaque démarrage (docker-compose.yml) : il cache les fichiers de
+# /etc/skel (.bashrc, .profile) posés par useradd. Les remettre donne aux shells des agents et au terminal partagé
+# leur configuration habituelle. Un fichier déjà présent n'est jamais remplacé.
+seed_home() {
+  local skel="${SKEL_DIR:-/etc/skel}" home="${HOME:-/home/agent}" src name
+  [ -d "$skel" ] && [ -d "$home" ] && [ -w "$home" ] || return 0
+  for src in "$skel"/.[!.]* "$skel"/*; do
+    [ -f "$src" ] || continue
+    name="$(basename "$src")"
+    [ -e "$home/$name" ] || cp -p "$src" "$home/$name" 2>/dev/null || log "copie de $name dans $home impossible"
+  done
+}
+
 # Boucle de supervision minimale : relance la commande 1 s après chaque arrêt.
 supervise() {
   local name="$1"
@@ -59,6 +72,7 @@ supervise() {
 
 main() {
   mkdir -p /tmp/.X11-unix 2>/dev/null || true
+  seed_home
 
   supervise Xvfb run_xvfb
   if wait_for_x; then

@@ -80,15 +80,26 @@ export class ComputerClient {
     return this.call('/browser', req, 90_000);
   }
 
-  inspect(req: Pick<BrowserRequest, 'ref' | 'selector'>): Promise<BrowserTargetInfo & { screenshotPng?: string }> {
+  /** Label, screenshot and `pin` of the element designated by `pin` (an earlier inspect), `ref` or `selector`. */
+  inspect(req: Pick<BrowserRequest, 'ref' | 'selector' | 'pin'>): Promise<BrowserTargetInfo & { screenshotPng?: string }> {
     return this.call('/browser/inspect', req, 30_000);
   }
 
-  async download(path: string): Promise<Response> {
+  /**
+   * Streams a file of /workspace. `headersTimeoutMs` bounds only the wait for the response headers: the body is
+   * then read at the pace of the consumer (a browser download with backpressure), however long that takes.
+   */
+  async download(path: string, headersTimeoutMs = 120_000): Promise<Response> {
     if (!this.token) throw new ComputerError('Ordinateur non configuré.');
     const url = new URL('/files/download', this.baseUrl);
     url.searchParams.set('path', path);
-    return fetch(url, { headers: { authorization: `Bearer ${this.token}` }, signal: AbortSignal.timeout(120_000) });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`pas de réponse de l’ordinateur après ${Math.round(headersTimeoutMs / 1000)} s`)), headersTimeoutMs);
+    try {
+      return await fetch(url, { headers: { authorization: `Bearer ${this.token}` }, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** WebSocket URL for VNC / terminal bridges (token passed as header by the proxy). */

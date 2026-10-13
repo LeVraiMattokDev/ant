@@ -33,7 +33,7 @@ export function ChannelSettingsModal({ channel, open, onClose }: { channel: Chan
     mutationFn: (input: Partial<ChannelInput>) => patch<ChannelDTO>(`/api/channels/${channel.id}`, input),
     onSuccess: (ch) => {
       qc.setQueryData<ChannelDTO[]>(qk.channels, (d) => d?.map((c) => (c.id === ch.id ? ch : c)));
-      toast.success('Canal mis à jour');
+      toast.success('Équipe mise à jour');
       onClose();
     },
     onError: (err) => setError(errorMessage(err)),
@@ -43,7 +43,7 @@ export function ChannelSettingsModal({ channel, open, onClose }: { channel: Chan
     mutationFn: () => del(`/api/channels/${channel.id}`),
     onSuccess: () => {
       qc.setQueryData<ChannelDTO[]>(qk.channels, (d) => d?.filter((c) => c.id !== channel.id));
-      toast.success('Canal archivé', `#${channel.name}`);
+      toast.success('Équipe archivée', `#${channel.name}`);
       onClose();
       navigate('/');
     },
@@ -59,7 +59,7 @@ export function ChannelSettingsModal({ channel, open, onClose }: { channel: Chan
   const onArchive = async () => {
     const ok = await confirm({
       title: `Archiver #${channel.name} ?`,
-      body: 'Le canal disparaît de la liste et les bots n’y répondent plus. L’historique reste dans la recherche et le journal.',
+      body: 'L’équipe disparaît de la liste et les bots n’y répondent plus. L’historique reste dans la recherche et le journal.',
       confirmLabel: 'Archiver',
       danger: true,
     });

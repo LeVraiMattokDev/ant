@@ -258,7 +258,7 @@ describe.skipIf(!hasDb)('bot runs', () => {
         return { exitCode: 0, stdout: 'pushed', stderr: '', timedOut: false, truncated: false, durationMs: 3 };
       },
       browser: async () => ({ ok: true, url: 'https://www.linkedin.com/feed/', title: 'LinkedIn' }),
-      inspect: async () => ({ url: 'https://www.linkedin.com/feed/', title: 'LinkedIn', elementLabel: 'Publier', screenshotPng: 'iVBOR' }),
+      inspect: async () => ({ url: 'https://www.linkedin.com/feed/', title: 'LinkedIn', elementLabel: 'Publier', pin: '6f1e9c2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b', screenshotPng: 'iVBOR' }),
     });
     const deps = workerDeps(t.ctx, fakeQuery(async function* () {}).query, { computer });
     const runRow = (await t.ctx.db.query.runs.findFirst({ where: eq(runs.id, run!.id) }))!;
@@ -272,6 +272,7 @@ describe.skipIf(!hasDb)('bot runs', () => {
       channel: null,
       computeSource: 'subscription',
       pendingApprovals: [],
+      outputs: { attachments: [] },
       botsBySlug: new Map(),
       setActivity: async () => undefined,
     };

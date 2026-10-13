@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import type { AuthorKind, ChannelDTO, ChannelInput } from '@ant/shared';
-import { bots, channelMembers, channels, routines } from '../db/schema';
+import { bots, channelMembers, channelReads, channels, routines } from '../db/schema';
 import { channelToDTO } from '../lib/dto';
 import { HttpError } from '../lib/errors';
 import { publish } from '../lib/events';
@@ -41,14 +41,23 @@ export async function listChannels(ctx: Ctx): Promise<ChannelDTO[]> {
     where channel_id = any(${ctx.sql.array(ids)}::uuid[]) and thread_root_id is null and status <> 'streaming'
     order by channel_id, created_at desc`;
   const byChannel = new Map(latest.map((m) => [m.channel_id, m]));
+  const reads = await ctx.db.select().from(channelReads).where(inArray(channelReads.channelId, ids));
+  const readAt = new Map(reads.map((x) => [x.channelId, x.lastReadAt]));
   return rows.map((r) => {
     const m = byChannel.get(r.id);
     return channelToDTO(
       r,
       members.filter((x) => x.channelId === r.id).map((x) => x.botId),
       m ? { content: m.content, authorKind: m.author_kind, botId: m.bot_id, createdAt: new Date(m.created_at).toISOString() } : null,
+      readAt.get(r.id) ?? null,
     );
   });
+}
+
+/** The owner's read mark of a conversation (null when never marked). */
+export async function channelLastReadAt(ctx: Ctx, channelId: string): Promise<Date | null> {
+  const row = await ctx.db.query.channelReads.findFirst({ where: eq(channelReads.channelId, channelId) });
+  return row?.lastReadAt ?? null;
 }
 
 async function assertBots(ctx: Ctx, botIds: string[]): Promise<void> {
@@ -89,7 +98,7 @@ export async function updateGroupChannel(ctx: Ctx, id: string, input: Partial<Ch
   });
   await publish(ctx.sql, { type: 'channel.updated', channelId: id });
   const updated = await getChannel(ctx, id);
-  return channelToDTO(updated, await channelBotIds(ctx, id));
+  return channelToDTO(updated, await channelBotIds(ctx, id), null, await channelLastReadAt(ctx, id));
 }
 
 export async function archiveChannel(ctx: Ctx, id: string): Promise<void> {

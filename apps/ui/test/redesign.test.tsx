@@ -127,7 +127,7 @@ describe('Composer "+" menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Plus d’actions' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Mentionner un bot' }));
     await waitFor(() => expect(textarea.value).toBe('Salut @'));
-    const list = await screen.findByRole('listbox', { name: 'Bots du canal' });
+    const list = await screen.findByRole('listbox', { name: 'Bots de la conversation' });
     expect(within(list).getAllByRole('option').map((o) => o.textContent)).toEqual(['🛠️Dev@dev', '🛠️Xena@xena']); // the fixture bots have a custom emoji avatar
   });
 

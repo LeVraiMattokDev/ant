@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { BotDTO, ChannelDTO, RoutineDTO, RoutineDraftDTO, RoutineInput } from '@ant/shared';
 import { errorMessage, post } from '../../lib/api';
+import { TOUCH_QUERY, useMediaQuery } from '../../lib/hooks';
 import { qk } from '../../lib/queries';
 import { toast } from '../../lib/toast';
 import { Field, Spinner } from '../ui';
@@ -29,6 +30,7 @@ export function NewRoutine({
   initialChannelId?: string;
 }) {
   const qc = useQueryClient();
+  const touch = useMediaQuery(TOUCH_QUERY);
   const [botId, setBotId] = useState(() => (initialBotId && bots.some((b) => b.id === initialBotId) ? initialBotId : (bots[0]?.id ?? '')));
   const [text, setText] = useState('');
   const [draft, setDraft] = useState<(RoutineFields & { description: string }) | null>(null);
@@ -115,12 +117,14 @@ export function NewRoutine({
             <textarea
               id="nr-text"
               data-autofocus
+              enterKeyHint={touch ? 'enter' : 'go'}
               className="textarea min-h-[64px]"
               placeholder={EXAMPLES[0]}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                // On a phone, Enter adds a line (no Shift+Enter on a touch keyboard); the button interprets.
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && (!touch || e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
                   e.currentTarget.form?.requestSubmit();
                 }

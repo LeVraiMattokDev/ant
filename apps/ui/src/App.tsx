@@ -12,6 +12,7 @@ import { DESKTOP_QUERY, useMediaQuery } from './lib/hooks';
 import { Toaster } from './components/Toaster';
 import { ConfirmProvider } from './components/Modal';
 import { LoadingBlock, ErrorBlock } from './components/ui';
+import { featureBareRoutes, featureRoutes } from './features';
 import { LoginPage } from './routes/Login';
 import { SetupPage } from './routes/Setup';
 import { HomePage } from './routes/Home';
@@ -71,7 +72,7 @@ function ProtectedApp() {
     return <Navigate to={next && next !== '/' ? `/login?next=${encodeURIComponent(next)}` : '/login'} replace />;
   }
 
-  return (
+  const shell = (
     <AppShell>
       {/* Reset on navigation so a screen that failed (e.g. a lazy chunk gone after a deployment) does not block the others. */}
       <ErrorBoundary resetKey={location.pathname}>
@@ -92,11 +93,35 @@ function ProtectedApp() {
             <Route path="/quota" element={<QuotaPage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            {/* Feature modules (features/*): each team declares its screens in its own module. */}
+            {featureRoutes().map((r) => (
+              <Route key={r.path} path={r.path} element={r.element} />
+            ))}
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </Suspense>
       </ErrorBoundary>
     </AppShell>
+  );
+
+  // Full-screen feature screens (guides) skip the shell; everything else is a screen of the shell.
+  const bare = featureBareRoutes();
+  if (bare.length === 0) return shell;
+  return (
+    <Routes>
+      {bare.map((r) => (
+        <Route
+          key={r.path}
+          path={r.path}
+          element={
+            <ErrorBoundary resetKey={location.pathname}>
+              <Suspense fallback={<Splash />}>{r.element}</Suspense>
+            </ErrorBoundary>
+          }
+        />
+      ))}
+      <Route path="*" element={shell} />
+    </Routes>
   );
 }
 

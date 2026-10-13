@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, lt, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, or, sql as dsql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { settingsPatchSchema, type AuditEntryDTO, type NetworkInfoDTO } from '@ant/shared';
@@ -52,7 +52,8 @@ export async function systemRoutes(app: FastifyInstance, deps: WebDeps): Promise
   app.get<{ Querystring: { event?: string; actor?: string; before?: string; limit?: string } }>('/api/audit', async (req) => {
     const conditions: SQL[] = [];
     if (req.query.event) conditions.push(eq(auditLog.event, req.query.event));
-    if (req.query.actor) conditions.push(eq(auditLog.actor, req.query.actor));
+    // A bot's sub-agents act as `bot:<slug>/<agent>`: filtering on the bot shows them too.
+    if (req.query.actor) conditions.push(or(eq(auditLog.actor, req.query.actor), dsql`starts_with(${auditLog.actor}, ${`${req.query.actor}/`})`)!);
     if (req.query.before && /^\d+$/.test(req.query.before)) conditions.push(lt(auditLog.id, Number(req.query.before)));
     const limit = Math.min(Math.max(Number(req.query.limit ?? 100) || 100, 1), 500);
     const rows = await ctx.db
@@ -101,11 +102,13 @@ export async function systemRoutes(app: FastifyInstance, deps: WebDeps): Promise
       .object({ endpoint: z.string().url().max(2000), keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }) })
       .parse(req.body);
     if (!/^https:\/\//.test(body.endpoint)) throw new HttpError(400, 'invalid_endpoint', 'Point de terminaison push invalide.');
-    await ctx.db
+    const [row] = await ctx.db
       .insert(pushSubscriptions)
       .values({ endpoint: body.endpoint, p256dh: body.keys.p256dh, auth: body.keys.auth, userAgent: (req.headers['user-agent'] ?? '').slice(0, 300) })
-      .onConflictDoUpdate({ target: pushSubscriptions.endpoint, set: { p256dh: body.keys.p256dh, auth: body.keys.auth, failures: 0 } });
-    await audit(ctx.db, { actor: 'owner', event: 'push.subscribe', ip: req.ip });
+      .onConflictDoUpdate({ target: pushSubscriptions.endpoint, set: { p256dh: body.keys.p256dh, auth: body.keys.auth, failures: 0 } })
+      // xmax = 0 only for a freshly inserted row: the device re-registers on every visit to Réglages.
+      .returning({ inserted: dsql<boolean>`(xmax = 0)` });
+    if (row?.inserted) await audit(ctx.db, { actor: 'owner', event: 'push.subscribe', ip: req.ip });
     return { ok: true };
   });
 

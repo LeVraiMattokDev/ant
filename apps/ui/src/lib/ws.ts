@@ -5,7 +5,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
-import type { ServerEvent } from '@ant/shared';
+import type { ClientEvent, ServerEvent } from '@ant/shared';
 import { fetchAuthState, qk } from './queries';
 import { dispatchServerEvent, type DispatchHooks } from './ws-dispatch';
 
@@ -88,6 +88,21 @@ class RealtimeClient {
   }
 
   getStatus = (): WsStatus => this.status;
+
+  /**
+   * Sends a message to the server (presence…). Returns false when the socket is not open: the caller sends it again
+   * once `useWsStatus()` is back to 'open' (events sent while disconnected are not queued).
+   */
+  send(event: ClientEvent): boolean {
+    const s = this.socket;
+    if (!s || s.readyState !== WebSocket.OPEN || this.status !== 'open') return false;
+    try {
+      s.send(JSON.stringify(event));
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   subscribe = (l: () => void): (() => void) => {
     this.listeners.add(l);

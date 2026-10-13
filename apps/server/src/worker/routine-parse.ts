@@ -26,6 +26,7 @@ export async function parseRoutine(deps: WorkerDeps, requestId: string, text: st
   const settings = await getSettings(deps.ctx.db);
   const res = await oneShot<{ cron: string; instruction: string; urgent: boolean }>(deps, settings, {
     label: 'routine-parse',
+    purpose: 'routine_parse',
     model: TRIAGE_MODEL,
     effort: TRIAGE_EFFORT,
     system: `Tu convertis une demande de routine en expression cron. Nous sommes le ${formatLocalDateTime(new Date(), settings.timezone)}. Exemples : « chaque lundi à 8h » → "0 8 * * 1" ; « tous les jours à 18h30 » → "30 18 * * *" ; « en semaine à 9h » → "0 9 * * 1-5" ; « le 1er de chaque mois à 10h » → "0 10 1 * *". Pas plus d’une exécution toutes les 15 minutes.`,

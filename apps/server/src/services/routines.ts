@@ -66,6 +66,9 @@ export function routineToDTO(row: RoutineRow): RoutineDTO {
     instruction: row.instruction,
     urgent: row.urgent,
     enabled: row.enabled,
+    proposed: row.proposed,
+    completionPush: row.completionPush ?? null,
+    silentIfNothing: row.silentIfNothing,
     lastRunAt: row.lastRunAt?.toISOString() ?? null,
     nextRuns: row.enabled ? nextRuns(row.cron, row.timezone).map((d) => d.toISOString()) : [],
     createdAt: row.createdAt.toISOString(),
@@ -109,7 +112,11 @@ async function resolveTarget(ctx: Ctx, botId: string, channelId: string | null |
   return id;
 }
 
-export async function createRoutine(ctx: Ctx, input: RoutineInput, defaultTimezone: string): Promise<RoutineDTO> {
+/**
+ * `opts.proposed`: created by a bot (routine_propose), shown as a proposal until the owner enables it. Not part of
+ * RoutineInput, so POST /api/routines cannot set it.
+ */
+export async function createRoutine(ctx: Ctx, input: RoutineInput, defaultTimezone: string, opts: { proposed?: boolean } = {}): Promise<RoutineDTO> {
   const timezone = input.timezone ?? defaultTimezone;
   const cron = validateCron(input.cron, timezone);
   if (!input.instruction.trim()) throw new HttpError(400, 'invalid_instruction', 'La consigne est obligatoire.');
@@ -126,6 +133,9 @@ export async function createRoutine(ctx: Ctx, input: RoutineInput, defaultTimezo
       instruction: input.instruction.trim(),
       urgent: input.urgent ?? false,
       enabled,
+      proposed: opts.proposed ?? false,
+      completionPush: input.completionPush ?? null,
+      silentIfNothing: input.silentIfNothing ?? false,
       nextRunAt: enabled ? nextRuns(cron, timezone, 1)[0]! : null,
     })
     .returning();
@@ -136,7 +146,8 @@ export async function createRoutine(ctx: Ctx, input: RoutineInput, defaultTimezo
 /**
  * - `channelId: null` moves the routine to its bot's private conversation.
  * - A new bot without a `channelId` keeps the current channel when the new bot may post there, else takes its DM.
- * - Enabling a routine checks its schedule and target again (a routine proposed by a bot was created disabled).
+ * - Enabling a routine checks its schedule and target again (a routine proposed by a bot was created disabled), and
+ *   ends its « proposée » state.
  */
 export async function updateRoutine(ctx: Ctx, id: string, patch: Partial<RoutineInput>): Promise<RoutineDTO> {
   const current = await ctx.db.query.routines.findFirst({ where: eq(routines.id, id) });
@@ -165,6 +176,9 @@ export async function updateRoutine(ctx: Ctx, id: string, patch: Partial<Routine
       sourceText: patch.sourceText?.trim() || current.sourceText,
       urgent: patch.urgent ?? current.urgent,
       enabled,
+      proposed: enabling ? false : current.proposed,
+      completionPush: patch.completionPush === undefined ? current.completionPush : patch.completionPush,
+      silentIfNothing: patch.silentIfNothing ?? current.silentIfNothing,
       botId,
       channelId,
       nextRunAt: enabled ? nextRuns(cron, timezone, 1)[0]! : null,
@@ -181,11 +195,14 @@ export async function deleteRoutine(ctx: Ctx, id: string): Promise<void> {
   await publish(ctx.sql, { type: 'routines.updated' });
 }
 
+/** Enabled routines whose next occurrence is due, of bots that still exist (an archived bot's routines never fire). */
 export async function dueRoutines(ctx: Ctx, now = new Date()): Promise<RoutineRow[]> {
-  return ctx.db
-    .select()
+  const rows = await ctx.db
+    .select({ routine: routines })
     .from(routines)
+    .innerJoin(bots, and(eq(bots.id, routines.botId), isNull(bots.archivedAt)))
     .where(and(eq(routines.enabled, true), isNotNull(routines.nextRunAt), lte(routines.nextRunAt, now)));
+  return rows.map((r) => r.routine);
 }
 
 /**

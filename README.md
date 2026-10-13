@@ -189,7 +189,8 @@ Méthode documentée par Anthropic pour les machines sans navigateur ([documenta
    (8 $/jour et 100 $/mois par défaut), car les coûts calculés par Ant sont des estimations de l'Agent SDK.
 
 Sans clé API, Ant fonctionne sur l'abonnement seul. Les tâches autonomes restent alors en pause tant que tu ne passes pas
-au mode « Abonnement puis crédits API » ou « Abonnement uniquement ».
+au mode « Abonnement puis crédits API » ou « Abonnement uniquement » : 6 h au plus, après quoi elles sont abandonnées
+avec un message ⏹️ dans leur conversation (une routine repart à sa prochaine occurrence).
 
 ### Notifications push (VAPID)
 
@@ -272,10 +273,11 @@ appareils du LAN et les réseaux Docker, dont celui de l'ordinateur des agents. 
 adresse ; un agent piégé par une page web, lui, pourrait envoyer depuis son ordinateur des tentatives de connexion sous de fausses
 adresses, contourner ainsi la limite par adresse, te bloquer la connexion pendant une heure (limite globale) et fausser l'Audit.
 
-**Juste après la première connexion (§ 8), indique donc l'adresse exacte de NPM** telle qu'Ant la voit : ouvre
-`https://ant.mondomaine.ch/api/system/network`, reporte la valeur de `peerAddress` (sans le préfixe `::ffff:`) dans `TRUST_PROXY`
-(par exemple `TRUST_PROXY=192.168.1.20`), puis lance `docker compose up -d web`. Ouvre à nouveau la page : `clientIp` doit
-toujours être ton adresse, pas celle de NPM (sinon, l'adresse saisie est fausse). Si l'adresse de NPM change, refais de même.
+**Juste après la première connexion (§ 8), indique donc l'adresse exacte de NPM** telle qu'Ant la voit : **Réglages →
+Sécurité → Adresse du proxy** l'affiche (ou `https://ant.mondomaine.ch/api/system/network`, champ `peerAddress`, sans le
+préfixe `::ffff:`) ; reporte-la dans `TRUST_PROXY` (par exemple `TRUST_PROXY=192.168.1.20`), puis lance
+`docker compose up -d web`. Recharge la page : « Ton adresse retenue » (`clientIp`) doit toujours être ton adresse, pas
+celle de NPM (sinon, l'adresse saisie est fausse). Si l'adresse de NPM change, refais de même.
 Ne mets jamais `TRUST_PROXY=true` : NPM ajoute l'adresse réelle à la fin de l'en-tête, et Ant retiendrait alors la première,
 choisie par le client. Ancienne valeur par défaut, elle est remplacée automatiquement par `deploy/upgrade.sh`.
 
@@ -438,6 +440,8 @@ L'écran **Audit** liste toutes les actions des agents et les connexions. Il est
 | `backup` est `unhealthy` | `docker compose logs --tail 20 backup` : base injoignable, disque plein, ou NAS qui refuse l'écriture (§ 3, point 6) |
 | Pas de notifications | Clés VAPID présentes ? Sur iPhone, PWA installée ? Bouton « Tester » dans Réglages |
 | Passkey refusée | `PUBLIC_ORIGIN` doit correspondre exactement au domaine utilisé dans le navigateur |
+| Bannière « Le worker ne répond pas » | `docker compose ps worker` puis `docker compose logs --tail 50 worker` ; `docker compose up -d worker` |
+| « ENCRYPTION_KEY n’est pas celle… » à la connexion | Base restaurée avec un autre `.env` : connecte-toi avec un code de secours ou une passkey, puis remets l'ancienne `ENCRYPTION_KEY` dans `.env` (§ 4) et `docker compose up -d web` |
 
 ---
 
@@ -452,5 +456,5 @@ pnpm dev:worker   # worker (CLAUDE_CODE_OAUTH_TOKEN et/ou ANTHROPIC_API_KEY dans
 pnpm dev:ui       # interface sur :5173 (proxy vers :8080)
 pnpm test         # tests (les tests d'intégration utilisent TEST_DATABASE_URL, par défaut postgres://postgres@localhost:5432/postgres)
 pnpm typecheck
-node --test deploy/tests/*.test.mjs   # scripts de déploiement (sauvegarde, restauration, mise à jour, pare-feu ; en root pour le pare-feu)
+pnpm test:deploy  # scripts de déploiement (node --test deploy/tests/*.test.mjs : sauvegarde, restauration, mise à jour, pare-feu ; PostgreSQL local, root pour le pare-feu)
 ```

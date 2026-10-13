@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { backoffDelay, wsUrl } from '../../lib/ws';
+import { SESSION_CLOSE_CODE, backoffDelay, wsUrl } from '../../lib/ws';
+import { confirmSessionEnded } from './session';
 
 function cssVar(name: string, fallback: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -13,7 +15,8 @@ function cssVar(name: string, fallback: string): string {
 export function TerminalView({ interactive }: { interactive: boolean }) {
   const container = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const [status, setStatus] = useState<'connecting' | 'open' | 'closed'>('connecting');
+  const qc = useQueryClient();
+  const [status, setStatus] = useState<'connecting' | 'open' | 'closed' | 'expired'>('connecting');
 
   useEffect(() => {
     const el = container.current;
@@ -51,7 +54,9 @@ export function TerminalView({ interactive }: { interactive: boolean }) {
       const socket = new WebSocket(wsUrl('/api/computer/terminal'));
       socket.binaryType = 'arraybuffer';
       ws = socket;
+      let opened = false;
       socket.onopen = () => {
+        opened = true;
         attempt = 0;
         setStatus('open');
         sendResize();
@@ -60,9 +65,26 @@ export function TerminalView({ interactive }: { interactive: boolean }) {
         if (typeof ev.data === 'string') term.write(ev.data);
         else if (ev.data instanceof ArrayBuffer) term.write(decoder.decode(ev.data));
       };
-      socket.onclose = () => {
+      socket.onclose = (ev: CloseEvent) => {
+        if (disposed) return;
+        const retry = () => {
+          if (!disposed) timer = setTimeout(connect, backoffDelay(attempt++));
+        };
+        // 4401: the session ended. A refused upgrade (HTTP 401) closes before opening. Ask the server before retrying.
+        if (ev.code === SESSION_CLOSE_CODE || !opened) {
+          setStatus(ev.code === SESSION_CLOSE_CODE ? 'expired' : 'closed');
+          void confirmSessionEnded(qc).then((ended) => {
+            if (disposed) return;
+            if (ended) setStatus('expired');
+            else {
+              setStatus('closed');
+              retry();
+            }
+          });
+          return;
+        }
         setStatus('closed');
-        if (!disposed) timer = setTimeout(connect, backoffDelay(attempt++));
+        retry();
       };
     };
     connect();
@@ -102,7 +124,13 @@ export function TerminalView({ interactive }: { interactive: boolean }) {
     <div className="flex h-full min-h-[280px] flex-col overflow-hidden rounded-[12px] border border-line bg-bg">
       <div className="flex items-center gap-2 border-b border-line px-3 py-1.5 text-[12px] text-muted">
         <span className={status === 'open' ? 'text-success' : status === 'connecting' ? 'text-warning' : 'text-danger'}>●</span>
-        {status === 'open' ? 'Terminal connecté' : status === 'connecting' ? 'Connexion…' : 'Déconnecté, nouvelle tentative…'}
+        {status === 'open'
+          ? 'Terminal connecté'
+          : status === 'connecting'
+            ? 'Connexion…'
+            : status === 'expired'
+              ? 'Session expirée : reconnecte-toi.'
+              : 'Déconnecté, nouvelle tentative…'}
         {!interactive && <span className="ml-auto text-subtle">Lecture seule : prends la main pour taper</span>}
       </div>
       <div ref={container} className="min-h-0 flex-1 p-2" aria-label="Terminal de l’ordinateur des agents" />

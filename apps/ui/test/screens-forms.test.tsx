@@ -248,8 +248,8 @@ describe('ApprovalCard past its deadline', () => {
 
 describe('Search result place', () => {
   const channels: ChannelDTO[] = [
-    { id: 'dm1', kind: 'dm', name: 'Xena', topic: '', botIds: ['b2'], dmBotId: 'b2', lastMessageAt: null, lastMessage: null, createdAt: '2026-10-01T10:00:00.000Z' },
-    { id: 'g1', kind: 'group', name: 'general', topic: '', botIds: ['b1', 'b2'], dmBotId: null, lastMessageAt: null, lastMessage: null, createdAt: '2026-10-01T10:00:00.000Z' },
+    { id: 'dm1', kind: 'dm', name: 'Xena', topic: '', botIds: ['b2'], dmBotId: 'b2', lastMessageAt: null, lastMessage: null, lastReadAt: null, createdAt: '2026-10-01T10:00:00.000Z' },
+    { id: 'g1', kind: 'group', name: 'general', topic: '', botIds: ['b1', 'b2'], dmBotId: null, lastMessageAt: null, lastMessage: null, lastReadAt: null, createdAt: '2026-10-01T10:00:00.000Z' },
   ];
   const result = (p: Parameters<typeof msg>[0], channelName: string): SearchResultDTO => ({ message: msg(p), channelName, snippet: '' });
   const nameOf = (id: string) => (id === 'dm1' ? 'Xena' : '#general');

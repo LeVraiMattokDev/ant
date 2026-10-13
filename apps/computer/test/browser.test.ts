@@ -71,6 +71,22 @@ const TAMPERED = `<!doctype html><html><head><title>Piège</title></head><body>
 <script>window.RegExp = function () { return { test: function () { return true; } }; };</script>
 </body></html>`;
 
+/** A web component: its button lives in an open shadow root, which Playwright's selectors pierce. */
+const SHADOW = `<!doctype html><html><head><title>Composant</title></head><body>
+<send-box></send-box>
+<p id="out"></p>
+<script>
+customElements.define('send-box', class extends HTMLElement {
+  constructor() {
+    super();
+    var root = this.attachShadow({ mode: 'open' });
+    root.innerHTML = '<button id="send">Envoyer</button>';
+    root.getElementById('send').addEventListener('click', function () { document.getElementById('out').textContent += 'Envoyé;'; });
+  }
+});
+</script>
+</body></html>`;
+
 describe.skipIf(!chromiumAvailable())('browser (headless Chromium)', () => {
   let site: Server;
   let siteUrl: string;
@@ -88,6 +104,10 @@ describe.skipIf(!chromiumAvailable())('browser (headless Chromium)', () => {
       }
       if (req.url === '/feed') {
         res.end(FEED);
+        return;
+      }
+      if (req.url === '/shadow') {
+        res.end(SHADOW);
         return;
       }
       if (req.url === '/planted' || req.url === '/tampered') {
@@ -242,6 +262,23 @@ describe.skipIf(!chromiumAvailable())('browser (headless Chromium)', () => {
     expect(invalid.ok).toBe(false);
     expect(invalid.error).toMatch(/Épingle d'élément invalide/);
     expect((await post(base, '/browser/inspect', { pin: 'e2' })).status).toBe(400);
+    await act({ action: 'goto', url: `${siteUrl}/` });
+  });
+
+  it('inspect labels and pins an element inside an open shadow root', async () => {
+    type Inspected = BrowserTargetInfo & { screenshotPng?: string };
+    await act({ action: 'goto', url: `${siteUrl}/shadow` });
+    const card = await post<Inspected>(base, '/browser/inspect', { selector: '#send' });
+    expect(card.status).toBe(200);
+    // Without a label the approval could never run: the element is found inside the component, like Playwright does.
+    expect(card.body.elementLabel).toBe('Envoyer');
+    expect(card.body.pin).toMatch(/^[0-9a-f-]{36}$/);
+    // The mark and the outline are cleared inside the shadow root too.
+    expect((await act({ action: 'click', selector: '[data-ant-inspect]' })).ok).toBe(false);
+    expect((await act({ action: 'click', selector: '#send[style*="outline"]' })).ok).toBe(false);
+    expect((await post<Inspected>(base, '/browser/inspect', { pin: card.body.pin })).body).toMatchObject({ elementLabel: 'Envoyer', pin: card.body.pin });
+    expect((await act({ action: 'click', pin: card.body.pin })).ok).toBe(true);
+    expect((await act({ action: 'read' })).text).toContain('Envoyé;');
     await act({ action: 'goto', url: `${siteUrl}/` });
   });
 

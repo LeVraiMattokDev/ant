@@ -20,9 +20,16 @@ import type {
   AuthorKind,
   BotPermissions,
   ChannelKind,
+  CompletionPushMode,
   ComputeSource,
   ComputerHolder,
+  DraftKind,
+  DraftPlatform,
+  DraftStatus,
   EffortLevel,
+  FollowupCreator,
+  FollowupKind,
+  FollowupStatus,
   MemoryKind,
   MemoryScope,
   MessageMeta,
@@ -31,10 +38,15 @@ import type {
   NudgeStatus,
   RunOrigin,
   RunPriority,
+  RunDepth,
   RunStatus,
   RunTrigger,
+  TaskAssignee,
   TaskStatus,
   TimeRange,
+  UsagePurpose,
+  WatchKind,
+  WatchRender,
 } from '@ant/shared';
 
 const tsvector = customType<{ data: string }>({
@@ -131,6 +143,8 @@ export const bots = pgTable('bots', {
   quietHours: jsonb('quiet_hours').$type<TimeRange | null>(),
   apiDailyCapUsd: doublePrecision('api_daily_cap_usd'),
   paused: boolean('paused').notNull().default(false),
+  /** Completion push of this bot's runs; null = global setting. */
+  completionPush: text('completion_push').$type<CompletionPushMode>(),
   lastHeartbeatAt: ts('last_heartbeat_at'),
   archivedAt: ts('archived_at'),
   createdAt: createdAt(),
@@ -215,6 +229,22 @@ export interface RunPayload {
   nudgeTopics?: string[];
   handoffFromBotId?: string;
   resumeAfterSwitch?: boolean;
+  /** Handoff with return: when every run sharing `reportTo.runId` is over, that bot is woken with their answers. */
+  reportTo?: { runId: string; botId: string };
+  /** Run started by a followup of kind `work`. */
+  followupId?: string;
+  /** Run started by a watch that changed. */
+  watchId?: string;
+  /** Run started by the owner's edit or rejection of a draft. */
+  draftId?: string;
+  /** One-off model chosen by the owner for this message (« Approfondir »). */
+  depth?: RunDepth;
+  /** Automatic continuation (step limit): trigger of the run it continues (see effectiveTrigger()). */
+  continuedTrigger?: string;
+  /** Automatic continuation: first start of the first run of the chain, ISO (see chainStartedAt()). */
+  chainStartedAt?: string;
+  /** When the feature modules' afterRun hooks ran for this run's final state, ISO (they run at most once normally). */
+  afterRunAt?: string;
   [key: string]: unknown;
 }
 
@@ -275,9 +305,17 @@ export const runModelUsage = pgTable(
     cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
     cacheWriteTokens: integer('cache_write_tokens').notNull().default(0),
     costUsd: doublePrecision('cost_usd').notNull().default(0),
+    /** What the call was for (run trigger, or one-shot purpose); null on rows written before it existed. */
+    purpose: text('purpose').$type<UsagePurpose>(),
+    /** Routine whose run made the call. No foreign key: a routine deleted while its run is in flight must not make the insert fail. */
+    routineId: uuid('routine_id'),
     createdAt: createdAt(),
   },
-  (t) => [index('run_model_usage_day_idx').on(t.day), index('run_model_usage_month_idx').on(t.month, t.computeSource)],
+  (t) => [
+    index('run_model_usage_day_idx').on(t.day),
+    index('run_model_usage_month_idx').on(t.month, t.computeSource),
+    index('run_model_usage_routine_idx').on(t.routineId),
+  ],
 );
 
 export const handoffs = pgTable(
@@ -346,6 +384,18 @@ export const computeState = pgTable('compute_state', {
   updatedAt: updatedAt(),
 });
 
+/**
+ * Liveness of the services that cannot be asked directly: the worker (every scheduler pass), the backup service
+ * (after each attempt, through psql) and the last connection test (`diagnostic`). Keys: ServiceKey (@ant/shared).
+ */
+export const serviceStatus = pgTable('service_status', {
+  key: text('key').primaryKey(),
+  seenAt: ts('seen_at').notNull().defaultNow(),
+  version: text('version'),
+  detail: jsonb('detail').$type<Record<string, unknown>>().notNull().default({}),
+  updatedAt: updatedAt(),
+});
+
 export const subscriptionEvents = pgTable('subscription_events', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   at: ts('at').notNull().defaultNow(),
@@ -410,12 +460,14 @@ export const tasks = pgTable(
     title: text('title').notNull(),
     details: text('details').notNull().default(''),
     status: text('status').$type<TaskStatus>().notNull().default('open'),
+    /** `owner`: something the owner has to do, tracked by `botId`. */
+    assignee: text('assignee').$type<TaskAssignee>().notNull().default('bot'),
     dueAt: ts('due_at'),
     sourceMessageId: uuid('source_message_id'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('tasks_bot_status_idx').on(t.botId, t.status)],
+  (t) => [index('tasks_bot_status_idx').on(t.botId, t.status), index('tasks_assignee_status_idx').on(t.assignee, t.status)],
 );
 
 export const nudges = pgTable(
@@ -451,11 +503,149 @@ export const routines = pgTable('routines', {
   instruction: text('instruction').notNull(),
   urgent: boolean('urgent').notNull().default(false),
   enabled: boolean('enabled').notNull().default(true),
+  /** Proposed by a bot (routine_propose), not yet enabled by the owner. */
+  proposed: boolean('proposed').notNull().default(false),
+  /** Completion push of this routine's runs; null = its bot's setting. */
+  completionPush: text('completion_push').$type<CompletionPushMode>(),
+  /** « Silencieux si rien » : nothing is posted when the bot answers RIEN. */
+  silentIfNothing: boolean('silent_if_nothing').notNull().default(false),
   lastRunAt: ts('last_run_at'),
   nextRunAt: ts('next_run_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+/**
+ * Reminders and deferred work. `reminder`: the text is posted and pushed without any model call. `work`: the
+ * scheduler starts a run (trigger `followup`). One row per task due date (`task_id`), moved with it.
+ */
+export const followups = pgTable(
+  'followups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('kind').$type<FollowupKind>().notNull(),
+    /** null: the owner's own reminder (system message and push). */
+    botId: uuid('bot_id').references(() => bots.id, { onDelete: 'cascade' }),
+    /** null: push only. */
+    channelId: uuid('channel_id').references(() => channels.id, { onDelete: 'cascade' }),
+    threadRootId: uuid('thread_root_id'),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    runAt: ts('run_at').notNull(),
+    instruction: text('instruction').notNull(),
+    createdBy: text('created_by').$type<FollowupCreator>().notNull(),
+    /** Run whose bot scheduled it (followup_schedule). */
+    createdByRunId: uuid('created_by_run_id'),
+    chainId: uuid('chain_id'),
+    /** Followups chained without a message from the owner (FOLLOWUP_LIMITS.maxChainDepth). */
+    depth: integer('depth').notNull().default(0),
+    status: text('status').$type<FollowupStatus>().notNull().default('pending'),
+    sourceMessageId: uuid('source_message_id'),
+    firedAt: ts('fired_at'),
+    /** Run started when a `work` followup fired. */
+    runId: uuid('run_id'),
+    error: text('error'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index('followups_due_idx').on(t.status, t.runAt),
+    index('followups_bot_status_idx').on(t.botId, t.status),
+    index('followups_task_idx').on(t.taskId),
+  ],
+);
+
+/** The owner's read mark per conversation, shared by all his devices. */
+export const channelReads = pgTable('channel_reads', {
+  channelId: uuid('channel_id')
+    .primaryKey()
+    .references(() => channels.id, { onDelete: 'cascade' }),
+  lastReadAt: ts('last_read_at').notNull(),
+  updatedAt: updatedAt(),
+});
+
+/**
+ * One row per open realtime connection (web service): which conversation is on screen and whether the page is
+ * visible. Rows older than PRESENCE_TTL_MS count as gone; closed connections delete theirs.
+ */
+export const ownerPresence = pgTable(
+  'owner_presence',
+  {
+    connectionId: text('connection_id').primaryKey(),
+    /** sha256 of the session token (auth_sessions.id). */
+    sessionId: text('session_id'),
+    channelId: uuid('channel_id'),
+    visible: boolean('visible').notNull().default(false),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('owner_presence_channel_idx').on(t.channelId, t.updatedAt)],
+);
+
+/** Posts prepared by a bot, edited and approved by the owner, published by hand (X web intent). */
+export const drafts = pgTable(
+  'drafts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    botId: uuid('bot_id')
+      .notNull()
+      .references(() => bots.id, { onDelete: 'cascade' }),
+    channelId: uuid('channel_id').references(() => channels.id, { onDelete: 'set null' }),
+    threadRootId: uuid('thread_root_id'),
+    /** Card message in the conversation. */
+    messageId: uuid('message_id'),
+    createdByRunId: uuid('created_by_run_id'),
+    platform: text('platform').$type<DraftPlatform>().notNull().default('x'),
+    kind: text('kind').$type<DraftKind>().notNull().default('post'),
+    parts: jsonb('parts').$type<string[]>().notNull(),
+    replyToUrl: text('reply_to_url'),
+    mediaPaths: jsonb('media_paths').$type<string[]>().notNull().default([]),
+    notes: text('notes').notNull().default(''),
+    status: text('status').$type<DraftStatus>().notNull().default('draft'),
+    scheduledAt: ts('scheduled_at'),
+    /** « À publier maintenant » push sent for the current scheduledAt. */
+    notifiedAt: ts('notified_at'),
+    publishedUrl: text('published_url'),
+    publishedAt: ts('published_at'),
+    ownerFeedback: text('owner_feedback'),
+    decidedAt: ts('decided_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('drafts_status_idx').on(t.status, t.scheduledAt), index('drafts_bot_created_idx').on(t.botId, t.createdAt)],
+);
+
+/** Pages and feeds checked without any model call (fetched inside the computer); the bot is woken only on change. */
+export const watches = pgTable(
+  'watches',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    botId: uuid('bot_id')
+      .notNull()
+      .references(() => bots.id, { onDelete: 'cascade' }),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channels.id, { onDelete: 'cascade' }),
+    url: text('url').notNull(),
+    kind: text('kind').$type<WatchKind>().notNull().default('page'),
+    selector: text('selector'),
+    render: text('render').$type<WatchRender>().notNull().default('http'),
+    intervalMin: integer('interval_min').notNull().default(60),
+    instruction: text('instruction').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    /** Proposed by a bot (watch_propose), not yet enabled by the owner. */
+    proposed: boolean('proposed').notNull().default(false),
+    lastHash: text('last_hash'),
+    /** Normalised text of the last check (WATCH_LIMITS.maxSnapshotBytes). */
+    lastSnapshot: text('last_snapshot'),
+    lastDiff: text('last_diff'),
+    lastError: text('last_error'),
+    lastCheckedAt: ts('last_checked_at'),
+    lastChangedAt: ts('last_changed_at'),
+    nextCheckAt: ts('next_check_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('watches_due_idx').on(t.enabled, t.nextCheckAt), index('watches_bot_idx').on(t.botId)],
+);
 
 // ─────────────────────── Computer, approvals, audit ───────────────────────
 
@@ -493,6 +683,8 @@ export const approvals = pgTable(
     decidedAt: ts('decided_at'),
     executedAt: ts('executed_at'),
     expiresAt: ts('expires_at').notNull(),
+    /** A domain grant withdrawn by the owner before its 30 minutes ran out. */
+    revokedAt: ts('revoked_at'),
   },
   (t) => [index('approvals_status_idx').on(t.status, t.createdAt)],
 );

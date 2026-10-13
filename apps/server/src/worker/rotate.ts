@@ -19,23 +19,40 @@ const CONVERSATION_SYSTEM =
   'Résume une conversation entre un propriétaire et ses bots pour qu’un bot puisse la poursuivre sans l’historique complet : décisions prises, faits établis, demandes en cours, engagements du bot, préférences exprimées. Factuel, en français, 400 mots maximum.';
 const ROUTINE_SYSTEM =
   'Résume les exécutions précédentes d’une routine planifiée pour que le bot puisse la poursuivre sans leur historique complet : ce qui a été rapporté, les chiffres et faits utiles pour comparer d’une fois à l’autre, les points à suivre, les remarques du propriétaire. Factuel, en français, 400 mots maximum.';
+const WATCH_SYSTEM =
+  'Résume les exécutions précédentes d’une veille (page ou flux surveillé) pour que le bot puisse la poursuivre sans leur historique complet : changements constatés et ce qui en a été rapporté, éléments déjà signalés à ne pas répéter, points à suivre, remarques du propriétaire. Factuel, en français, 400 mots maximum.';
+const RUNS_SYSTEM =
+  'Résume les exécutions précédentes d’une tâche automatique d’un bot pour qu’il puisse la poursuivre sans leur historique complet : ce qui a été fait et rapporté, faits utiles pour la suite, points à suivre, remarques du propriétaire. Factuel, en français, 400 mots maximum.';
 const HEARTBEAT_SYSTEM =
   'Résume les revues proactives (heartbeats) précédentes d’un bot pour qu’il puisse les poursuivre sans leur historique complet : pistes examinées, relances envoyées ou abandonnées et pourquoi, points à surveiller. Factuel, en français, 400 mots maximum.';
 
-type SessionKind = 'conversation' | 'routine' | 'heartbeat';
+/** `runs`: any other session of its own (`<préfixe>:<id>`, e.g. a feature module's), summarised from its runs too. */
+type SessionKind = 'conversation' | 'routine' | 'heartbeat' | 'watch' | 'runs';
+
+const UUID = /^[0-9a-f-]{36}$/;
 
 /**
- * What an agent session is about, from its thread key:
- * `<channelId>` or `<channelId>:<threadRootId>` (a conversation), `routine:<routineId>`, `heartbeat:<botId>`.
+ * What an agent session is about, from its thread key: `<channelId>` or `<channelId>:<threadRootId>` (a conversation),
+ * `routine:<routineId>`, `heartbeat:<botId>`, `watch:<watchId>`, or any other `<préfixe>:<id>` whose prefix is not a
+ * channel id (a session of its own: its history is its runs, like a routine's).
  */
 export function parseThreadKey(threadKey: string): { kind: SessionKind; channelId: string | null; threadRootId: string | null } {
   if (threadKey.startsWith('routine:')) return { kind: 'routine', channelId: null, threadRootId: null };
   if (threadKey.startsWith('heartbeat:')) return { kind: 'heartbeat', channelId: null, threadRootId: null };
-  const [channelId = '', threadRootId = null] = threadKey.split(':');
-  const uuid = /^[0-9a-f-]{36}$/;
-  if (!uuid.test(channelId) || (threadRootId !== null && !uuid.test(threadRootId))) return { kind: 'conversation', channelId: null, threadRootId: null };
+  if (threadKey.startsWith('watch:')) return { kind: 'watch', channelId: null, threadRootId: null };
+  const [channelId = '', threadRootId = null, ...rest] = threadKey.split(':');
+  if (!UUID.test(channelId)) return { kind: /^[a-z][a-z0-9_-]*$/i.test(channelId) && threadRootId ? 'runs' : 'conversation', channelId: null, threadRootId: null };
+  if (rest.length > 0 || (threadRootId !== null && !UUID.test(threadRootId))) return { kind: 'conversation', channelId: null, threadRootId: null };
   return { kind: 'conversation', channelId, threadRootId };
 }
+
+const SYSTEMS: Record<SessionKind, string> = {
+  conversation: CONVERSATION_SYSTEM,
+  routine: ROUTINE_SYSTEM,
+  heartbeat: HEARTBEAT_SYSTEM,
+  watch: WATCH_SYSTEM,
+  runs: RUNS_SYSTEM,
+};
 
 function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -85,10 +102,12 @@ export async function rotateSession(deps: WorkerDeps, sessionId: string, origin:
     const names = new Map((await ctx.db.select({ id: bots.id, slug: bots.slug }).from(bots)).map((b) => [b.id, b.slug]));
     transcript = await recentTranscript(ctx, key.channelId, key.threadRootId, 80, names);
   }
-  const system = key.kind === 'routine' ? ROUTINE_SYSTEM : key.kind === 'heartbeat' ? HEARTBEAT_SYSTEM : CONVERSATION_SYSTEM;
+  const system = SYSTEMS[key.kind];
   const label = key.kind === 'conversation' ? 'Conversation récente' : 'Exécutions récentes';
   const res = await oneShot<{ summary: string }>(deps, settings, {
     label: `session-rotate:${bot.slug}`,
+    purpose: 'rotate',
+    routineId: key.kind === 'routine' ? session.threadKey.slice('routine:'.length) : null,
     model: TRIAGE_MODEL,
     effort: TRIAGE_EFFORT,
     system,
@@ -99,7 +118,10 @@ export async function rotateSession(deps: WorkerDeps, sessionId: string, origin:
     botId: bot.id,
     botDailyCapUsd: bot.apiDailyCapUsd,
   });
-  if (!res.ok) return `résumé impossible : ${res.reason}`;
+  // No compute right now: the next run past the threshold tries again (hourly job key). A real failure (model error,
+  // missing answer) ends the job « failed » with its reason, visible among the failed jobs.
+  if (!res.ok && res.paused) return `résumé reporté : ${res.reason}`;
+  if (!res.ok) throw new Error(`résumé de la session impossible : ${res.reason}`);
   await ctx.db.transaction(async (tx) => {
     await tx.update(agentSessions).set({ active: false, updatedAt: new Date() }).where(eq(agentSessions.id, session.id));
     await tx.insert(agentSessions).values({

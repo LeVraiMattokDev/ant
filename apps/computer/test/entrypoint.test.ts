@@ -1,5 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import { accessSync, constants, existsSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -94,6 +94,44 @@ function stop(child: ChildProcess | undefined, group: boolean): Promise<void> {
 describe('entrypoint.sh : configuration', () => {
   it('defaults to the socket the Node bridge uses', () => {
     expect(readFileSync(ENTRYPOINT, 'utf8')).toContain(`VNC_SOCKET="\${VNC_SOCKET:-${DEFAULT_VNC_SOCKET}}"`);
+  });
+});
+
+describe('entrypoint.sh : dossier personnel', () => {
+  it('puts back the /etc/skel files hidden by the tmpfs, without replacing those already there', async () => {
+    const t = await tempDir();
+    try {
+      const skel = path.join(t.dir, 'skel');
+      const home = path.join(t.dir, 'home');
+      mkdirSync(skel);
+      mkdirSync(home);
+      writeFileSync(path.join(skel, '.bashrc'), 'alias ll="ls -l"\n');
+      writeFileSync(path.join(skel, '.profile'), '. ~/.bashrc\n');
+      writeFileSync(path.join(home, '.profile'), 'déjà là\n');
+      const res = spawnSync('bash', ['-c', 'source "$1"; seed_home', 'entrypoint-test', ENTRYPOINT], {
+        env: { PATH, HOME: home, SKEL_DIR: skel },
+        encoding: 'utf8',
+      });
+      expect(res.status, res.stderr).toBe(0);
+      expect(readFileSync(path.join(home, '.bashrc'), 'utf8')).toBe('alias ll="ls -l"\n');
+      expect(readFileSync(path.join(home, '.profile'), 'utf8')).toBe('déjà là\n');
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('does nothing when there is no skeleton', async () => {
+    const t = await tempDir();
+    try {
+      const res = spawnSync('bash', ['-c', 'source "$1"; seed_home', 'entrypoint-test', ENTRYPOINT], {
+        env: { PATH, HOME: t.dir, SKEL_DIR: path.join(t.dir, 'absent') },
+        encoding: 'utf8',
+      });
+      expect(res.status).toBe(0);
+      expect(readdirSync(t.dir)).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
   });
 });
 

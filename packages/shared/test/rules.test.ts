@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { checkHandoff } from '../src/loop-guard';
 import { extractMentions, slugify } from '../src/mentions';
-import { browserActionNeedsApproval, classifyShellCommand, isSensitiveUrl } from '../src/risk';
+import { browserActionNeedsApproval, browserActionTargeted, classifyShellCommand, isSensitiveUrl } from '../src/risk';
+import { isSilentNothing } from '../src/capabilities';
 import { redactDeep, redactString } from '../src/redact';
 import { describeCron } from '../src/cron-describe';
 import { isWithinRange, localDateKey } from '../src/time';
@@ -121,5 +122,23 @@ describe('settings', () => {
     expect(DEFAULT_SETTINGS.apiMonthlyCapUsd).toBe(100);
     expect(DEFAULT_SETTINGS.apiDailyCapUsd).toBe(8);
     expect(DEFAULT_SETTINGS.timezone).toBe('Europe/Zurich');
+  });
+});
+
+describe('browser action target', () => {
+  it('aims a click, or a key sent to a ref or selector, at one element; an empty string is no target', () => {
+    expect(browserActionTargeted('click')).toBe(true);
+    expect(browserActionTargeted('press', 'e3')).toBe(true);
+    expect(browserActionTargeted('press', undefined, '#envoyer')).toBe(true);
+    expect(browserActionTargeted('press', '', '')).toBe(false);
+    expect(browserActionTargeted('press')).toBe(false);
+    expect(browserActionTargeted('type', 'e3')).toBe(false);
+  });
+});
+
+describe('silent answers', () => {
+  it('read RIEN whatever the case, spaces, punctuation or Markdown, and nothing else', () => {
+    for (const text of ['RIEN', 'Rien.', ' rien ! ', '**RIEN**', '« Rien »']) expect(isSilentNothing(text)).toBe(true);
+    for (const text of ['', 'Rien à signaler', 'Rien de neuf', 'RIEN\n\nSauf une chose']) expect(isSilentNothing(text)).toBe(false);
   });
 });

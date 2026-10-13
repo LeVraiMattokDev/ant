@@ -29,8 +29,9 @@ export async function loginWithPasskey(): Promise<void> {
   await post('/api/auth/passkey/login/verify', { response });
 }
 
-export async function registerPasskey(name: string): Promise<PasskeyDTO> {
-  const optionsJSON = await post<PublicKeyCredentialCreationOptionsJSON>('/api/auth/passkey/register/options');
+/** Adding a way in asks for the current password again (a borrowed session must not plant its own passkey). */
+export async function registerPasskey(name: string, password: string): Promise<PasskeyDTO> {
+  const optionsJSON = await post<PublicKeyCredentialCreationOptionsJSON>('/api/auth/passkey/register/options', { password });
   let response;
   try {
     response = await startRegistration({ optionsJSON });

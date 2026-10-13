@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type RFB from '@novnc/novnc';
 import { backoffDelay, wsUrl } from '../../lib/ws';
 import { Spinner } from '../ui';
+import { confirmSessionEnded } from './session';
 
-type VncState = 'connecting' | 'connected' | 'disconnected';
+type VncState = 'connecting' | 'connected' | 'disconnected' | 'expired';
 
 /** Live screen of the agents' computer. View-only unless the user holds control. */
 export function VncScreen({ interactive }: { interactive: boolean }) {
   const container = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<RFB | null>(null);
   const interactiveRef = useRef(interactive);
+  const qc = useQueryClient();
   const [state, setState] = useState<VncState>('connecting');
   const [error, setError] = useState<string | null>(null);
 
@@ -49,10 +52,16 @@ export function VncScreen({ interactive }: { interactive: boolean }) {
       });
       rfb.addEventListener('disconnect', (e) => {
         rfbRef.current = null;
+        if (cancelled) return;
         setState('disconnected');
         const clean = (e as CustomEvent<{ clean: boolean }>).detail?.clean;
         if (!clean) setError('Connexion à l’écran perdue.');
-        if (!cancelled) timer = setTimeout(() => void connect(), backoffDelay(attempt++));
+        // noVNC does not expose the close code: the session may have ended (4401). The server tells, before a retry.
+        void confirmSessionEnded(qc).then((ended) => {
+          if (cancelled) return;
+          if (ended) setState('expired');
+          else timer = setTimeout(() => void connect(), backoffDelay(attempt++));
+        });
       });
       rfb.addEventListener('securityfailure', () => setError('Le serveur VNC a refusé la connexion.'));
     };
@@ -83,6 +92,8 @@ export function VncScreen({ interactive }: { interactive: boolean }) {
               <Spinner />
               Connexion à l’écran…
             </>
+          ) : state === 'expired' ? (
+            <span>Session expirée : reconnecte-toi.</span>
           ) : (
             <>
               <span>{error ?? 'Écran déconnecté.'}</span>

@@ -162,7 +162,7 @@ export function Composer({
           <ul
             id={listId}
             role="listbox"
-            aria-label="Bots du canal"
+            aria-label="Bots de la conversation"
             className="menu-panel absolute bottom-full left-0 z-20 mb-2 w-72"
           >
             {candidates.map((b, i) => (

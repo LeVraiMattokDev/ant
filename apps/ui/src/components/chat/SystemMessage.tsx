@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { AlertTriangle, ArrowRightLeft, CalendarClock, GitBranch, Info, Repeat, Wrench, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, ArrowRightLeft, BellRing, CalendarClock, GitBranch, Info, PenLine, Repeat, Wrench, ShieldCheck } from 'lucide-react';
 import { EFFORT_LABELS, MODEL_LABELS, isEffortLevel, type BotDTO, type MessageDTO } from '@ant/shared';
 import { formatFull, formatShort } from '../../lib/format';
 import { useAllApprovals, useApproval } from '../../lib/queries';
@@ -8,7 +8,7 @@ import { ApprovalCard } from '../approvals/ApprovalCard';
 import { BotAvatar } from '../BotAvatar';
 import { cx } from '../ui';
 
-const SYSTEM_KINDS = new Set(['delegation', 'handoff', 'compute_switch', 'approval', 'tool', 'info', 'error']);
+const SYSTEM_KINDS = new Set(['delegation', 'handoff', 'compute_switch', 'approval', 'tool', 'info', 'error', 'reminder', 'draft']);
 
 /** System-authored messages, and bot messages whose kind is an event rather than a reply. */
 export function isSystemStyled(m: MessageDTO): boolean {
@@ -169,6 +169,19 @@ export function SystemMessage({ message, bots }: { message: MessageDTO; bots: Ma
     case 'routine':
       return (
         <Row icon={<CalendarClock className="size-4" />} time={createdAt} title="Routine">
+          {body}
+        </Row>
+      );
+    case 'reminder':
+      return (
+        <Row icon={<BellRing className="size-4" />} tone="accent" time={createdAt} title={author ? `Rappel de ${author.name}` : 'Rappel'}>
+          {body}
+        </Row>
+      );
+    case 'draft':
+      // The draft card itself is a feature extra rendered under this row (meta.draftId).
+      return (
+        <Row icon={<PenLine className="size-4" />} tone="plain" wide time={createdAt} title={author ? `Brouillon X de ${author.name}` : 'Brouillon X'}>
           {body}
         </Row>
       );

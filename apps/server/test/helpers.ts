@@ -101,7 +101,8 @@ export function stubComputer(overrides: Partial<Record<keyof ComputerClient, unk
     editFile: async (req: { path: string }) => ({ path: req.path, replacements: 1 }),
     listFiles: async () => [],
     browser: async () => ({ ok: true, url: 'https://example.org/', title: 'Example' }),
-    inspect: async () => ({ url: 'https://example.org/', title: 'Example', elementLabel: 'Envoyer' }),
+    // Like the computer service: an element found gets a pin, replayed by an approved action.
+    inspect: async () => ({ url: 'https://example.org/', title: 'Example', elementLabel: 'Envoyer', pin: '4d3c2b1a-0f9e-4d8c-8b7a-6f5e4d3c2b1a' }),
     download: async () => new Response('x'),
     wsUrl: () => 'ws://computer.test:7000/vnc',
     authHeader: 'Bearer test',

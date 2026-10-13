@@ -44,11 +44,6 @@ export function ActivityBar({
   if (!runs.length) return null;
   return (
     <div className="mx-auto flex w-full max-w-[880px] shrink-0 flex-wrap gap-1.5 px-4 pt-1 pb-1 md:px-6" aria-live="polite">
-      {workerDown && (
-        <div role="status" className="w-full rounded-[12px] border border-warning/40 bg-warning-soft px-3 py-1.5 text-[12.5px] text-fg">
-          Le worker ne répond pas : les bots ne peuvent pas travailler pour l’instant (voir <code>docker compose logs worker</code>).
-        </div>
-      )}
       {runs.map((run) => {
         const bot = bots.get(run.botId);
         return (

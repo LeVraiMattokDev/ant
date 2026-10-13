@@ -60,6 +60,7 @@ export function approval(p: Partial<ApprovalDTO> & { id: string }): ApprovalDTO 
     createdAt: '2026-10-12T10:00:00.000Z',
     decidedAt: null,
     expiresAt: '2099-10-15T10:00:00.000Z',
+    revokedAt: null,
     ...p,
   };
 }
@@ -79,6 +80,7 @@ export function bot(p: Partial<BotDTO> & { id: string }): BotDTO {
     quietHours: null,
     apiDailyCapUsd: null,
     paused: false,
+    completionPush: null,
     dmChannelId: 'dm1',
     activity: null,
     createdAt: '2026-10-01T10:00:00.000Z',

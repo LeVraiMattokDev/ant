@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { COMPLETION_PUSH_MODES } from './api';
 import { COMPUTE_MODES, DEFAULT_THRESHOLDS } from './quota';
 import { DEFAULT_SENSITIVE_DOMAINS } from './risk';
 import { isValidHHMM, isValidTimeZone } from './time';
@@ -7,6 +8,19 @@ const hhmm = z.string().refine(isValidHHMM, 'Format attendu : HH:MM');
 const pct = z.number().min(1).max(100);
 
 export const timeRangeSchema = z.object({ start: hhmm, end: hhmm });
+
+const isoDate = z.string().refine((v) => !Number.isNaN(new Date(v).getTime()), 'Date ISO attendue');
+
+/** State of the « Tout arrêter » emergency stop while it is engaged (written by POST /api/system/emergency-stop). */
+export const emergencyStopSchema = z.object({
+  at: isoDate,
+  reason: z.string().max(500).nullable(),
+  /** Bots this stop paused (the resume re-enables only these, not the ones the owner had paused himself). */
+  pausedBotIds: z.array(z.string().uuid()),
+  cancelledRuns: z.number().int().min(0),
+  rejectedApprovals: z.number().int().min(0),
+});
+export type EmergencyStopState = z.infer<typeof emergencyStopSchema>;
 
 export const appSettingsSchema = z.object({
   computeMode: z.enum(COMPUTE_MODES),
@@ -39,6 +53,23 @@ export const appSettingsSchema = z.object({
   subscriptionTokenCreatedAt: z.string().nullable(),
   /** Days without reaction before an ignored nudge topic may come back. */
   nudgeCooldownDays: z.number().int().min(1).max(90),
+  /** Push « <bot> a terminé » when a run ends while the owner is not looking (bots and routines may override). */
+  completionPush: z.enum(COMPLETION_PUSH_MODES),
+  /** With `completionPush: 'long'`: only runs that lasted at least this long. */
+  completionPushMinSeconds: z.number().int().min(10).max(3600),
+  /** notify_owner calls allowed per bot and per local day. */
+  notifyOwnerDailyLimit: z.number().int().min(0).max(50),
+  /**
+   * Spending cap of one run on the subscription, in API-equivalent dollars (passed as maxBudgetUsd); 0 = no cap.
+   * Protects the shared 5-hour window from a runaway loop.
+   */
+  perRunSubscriptionCapUsd: z.number().min(0).max(1_000),
+  /** Server-managed (emergency-stop / emergency-resume endpoints): not accepted by PATCH /api/settings. */
+  emergencyStop: emergencyStopSchema.nullable(),
+  /** Server-managed: domain grants decided before this instant no longer count (emergency stop, « Tout révoquer »). */
+  grantsRevokedAt: isoDate.nullable(),
+  /** End of the first-run guide (/bienvenue); null = not done. Set back to null to replay it. */
+  onboardingDoneAt: isoDate.nullable(),
 });
 
 export type AppSettings = z.infer<typeof appSettingsSchema>;
@@ -64,13 +95,24 @@ export const DEFAULT_SETTINGS: AppSettings = {
   approvalExpiryHours: 72,
   subscriptionTokenCreatedAt: null,
   nudgeCooldownDays: 14,
+  completionPush: 'long',
+  completionPushMinSeconds: 45,
+  notifyOwnerDailyLimit: 5,
+  perRunSubscriptionCapUsd: 5,
+  emergencyStop: null,
+  grantsRevokedAt: null,
+  onboardingDoneAt: null,
 };
 
-export const settingsPatchSchema = appSettingsSchema.partial();
+/** Keys only the server writes (dedicated endpoints): PATCH /api/settings drops them. */
+export const SERVER_MANAGED_SETTINGS = ['emergencyStop', 'grantsRevokedAt'] as const;
+
+/** What the owner may send to PATCH /api/settings. */
+export const settingsPatchSchema = appSettingsSchema.omit({ emergencyStop: true, grantsRevokedAt: true }).partial();
 export type SettingsPatch = z.infer<typeof settingsPatchSchema>;
 
-/** Validates a merged settings object, checking cross-field constraints. */
-export function mergeSettings(current: AppSettings, patch: SettingsPatch): AppSettings {
+/** Validates a merged settings object, checking cross-field constraints. Server code may also pass server-managed keys. */
+export function mergeSettings(current: AppSettings, patch: SettingsPatch | Partial<AppSettings>): AppSettings {
   const merged = appSettingsSchema.parse({ ...current, ...patch });
   const t = merged.thresholds;
   if (t.reserveFiveHour > t.hardFiveHour) throw new Error('Le seuil de réserve 5 h doit être inférieur ou égal au seuil maximal.');

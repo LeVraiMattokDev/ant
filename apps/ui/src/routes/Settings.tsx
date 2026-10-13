@@ -1,20 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { LogOut, Moon, Sun } from 'lucide-react';
 import { isValidHHMM, isValidTimeZone, type SettingsDTO } from '@ant/shared';
-import { post } from '../lib/api';
 import { formatTokens } from '../lib/format';
 import { useBots, useSettings } from '../lib/queries';
 import { useTheme } from '../lib/theme';
-import { realtime } from '../lib/ws';
-import { toast } from '../lib/toast';
+import { useLogout } from '../components/layout/useLogout';
 import { NumberField, SettingsSection } from '../components/settings/SettingsSection';
 import { SensitiveDomains } from '../components/settings/SensitiveDomains';
 import { SecuritySection } from '../components/settings/SecuritySection';
 import { NotificationsSection } from '../components/settings/NotificationsSection';
 import { settingsDiff, useUpdateSettings } from '../components/settings/useUpdateSettings';
 import { ErrorBlock, Field, LoadingBlock, PageHeader, Spinner, Toggle } from '../components/ui';
+import { FeatureSettingsSections } from '../features';
 
 function timeZones(): string[] {
   try {
@@ -224,17 +221,8 @@ function GeneralSettings({ settings }: { settings: SettingsDTO }) {
 
 export function SettingsPage() {
   const settings = useSettings();
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const logout = useMutation({
-    mutationFn: () => post('/api/auth/logout'),
-    onSettled: () => {
-      realtime.stop();
-      qc.clear();
-      navigate('/login', { replace: true });
-    },
-    onError: (err) => toast.fromError(err, 'Déconnexion incomplète'),
-  });
+  // Same logout as the rail and the mobile menu: this device also stops receiving notifications.
+  const logout = useLogout();
 
   return (
     <>
@@ -258,6 +246,7 @@ export function SettingsPage() {
           )}
           <NotificationsSection />
           <SecuritySection />
+          <FeatureSettingsSections />
         </div>
       </div>
     </>

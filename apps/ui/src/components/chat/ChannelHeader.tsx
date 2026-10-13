@@ -38,7 +38,7 @@ export function ChannelHeader({ channel, members, dmBot }: { channel: ChannelDTO
           type="button"
           onClick={() => setSettings(true)}
           className="flex min-w-0 items-center gap-2.5 rounded-[12px] py-1 pr-2 pl-1 text-left hover:bg-hover"
-          title="Réglages du canal"
+          title="Réglages de l’équipe"
         >
           <GroupAvatar bots={members} size={32} />
           <div className="min-w-0 leading-tight">
@@ -58,7 +58,7 @@ export function ChannelHeader({ channel, members, dmBot }: { channel: ChannelDTO
               ))}
               {members.length > 5 && <span className="pl-1 text-[12px] text-subtle">+{members.length - 5}</span>}
             </div>
-            <button type="button" className={iconBtn} onClick={() => setSettings(true)} aria-label="Réglages du canal" title="Réglages du canal">
+            <button type="button" className={iconBtn} onClick={() => setSettings(true)} aria-label="Réglages de l’équipe" title="Réglages de l’équipe">
               <Settings2 className="size-[18px]" />
             </button>
             <ChannelSettingsModal channel={channel} open={settings} onClose={() => setSettings(false)} />

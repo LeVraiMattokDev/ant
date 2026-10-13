@@ -19,6 +19,7 @@ function channel(p: Partial<ChannelDTO> & { id: string }): ChannelDTO {
     dmBotId: 'b1',
     lastMessageAt: null,
     lastMessage: null,
+    lastReadAt: null,
     createdAt: '2026-10-01T10:00:00.000Z',
     ...p,
   };

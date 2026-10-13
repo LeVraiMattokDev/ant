@@ -18,7 +18,12 @@ const origin = new URL(cfg.PUBLIC_ORIGIN);
 const existing = await ctx.db.query.owner.findFirst({ where: eq(owner.id, 1) });
 const setupToken = { value: existing?.totpEnabled ? null : (cfg.SETUP_TOKEN ?? randomToken(18)) };
 if (setupToken.value) {
-  logger.warn(`Ant n’est pas encore configuré. Ouvre ${cfg.PUBLIC_ORIGIN}/setup avec le jeton d’initialisation : ${setupToken.value}`);
+  // The logger masks the values of .env secrets: SETUP_TOKEN would show as [secret]. Only a generated token is printed.
+  logger.warn(
+    cfg.SETUP_TOKEN
+      ? `Ant n’est pas encore configuré. Ouvre ${cfg.PUBLIC_ORIGIN}/setup avec le jeton d’initialisation défini dans SETUP_TOKEN (.env).`
+      : `Ant n’est pas encore configuré. Ouvre ${cfg.PUBLIC_ORIGIN}/setup avec le jeton d’initialisation : ${setupToken.value} (nouveau à chaque démarrage tant que SETUP_TOKEN est vide dans .env)`,
+  );
 }
 if (origin.protocol !== 'https:') {
   logger.warn('PUBLIC_ORIGIN n’est pas en HTTPS : cookies non sécurisés et passkeys indisponibles hors localhost. Réservé au développement.');

@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { KeyRound, Trash2 } from 'lucide-react';
-import type { RecoveryCodesResponse } from '@ant/shared';
-import { del, errorMessage, post } from '../../lib/api';
+import type { NetworkInfoDTO, RecoveryCodesResponse } from '@ant/shared';
+import { ApiError, del, errorMessage, get, post } from '../../lib/api';
 import { formatFull, formatShort } from '../../lib/format';
 import { passwordStrength } from '../../lib/password';
 import { defaultPasskeyName, passkeysSupported, registerPasskey } from '../../lib/passkey';
@@ -10,7 +10,7 @@ import { qk, usePasskeys, useSessions } from '../../lib/queries';
 import { toast } from '../../lib/toast';
 import { Modal, useConfirm } from '../Modal';
 import { RecoveryCodes } from '../RecoveryCodes';
-import { Badge, ErrorBlock, Field, Spinner } from '../ui';
+import { Badge, ErrorBlock, Field, KeyValue, Spinner } from '../ui';
 import { SettingsSection } from './SettingsSection';
 
 function describeUserAgent(ua: string | null): string {
@@ -25,18 +25,24 @@ function ChangePassword() {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [revokePasskeys, setRevokePasskeys] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const strength = passwordStrength(next);
   const change = useMutation({
-    mutationFn: () => post('/api/auth/password', { current, next }),
+    mutationFn: () => post('/api/auth/password', { current, next, revokePasskeys }),
     onSuccess: () => {
       setCurrent('');
       setNext('');
       setConfirm('');
       setError(null);
-      // The server revokes every other session: refresh the "Sessions actives" list shown on the same page.
+      // The server revokes every other session (and the passkeys if asked): refresh the lists shown on the same page.
       void qc.invalidateQueries({ queryKey: qk.sessions });
-      toast.success('Mot de passe modifié');
+      if (revokePasskeys) {
+        void qc.invalidateQueries({ queryKey: qk.passkeys });
+        void qc.invalidateQueries({ queryKey: qk.authState });
+      }
+      toast.success('Mot de passe modifié', revokePasskeys ? 'Toutes les passkeys ont été supprimées.' : undefined);
+      setRevokePasskeys(false);
     },
     onError: (err) => setError(errorMessage(err)),
   });
@@ -61,6 +67,13 @@ function ChangePassword() {
       <Field label="Confirmation" htmlFor="pw-confirm">
         <input id="pw-confirm" type="password" className="input" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
       </Field>
+      <label className="flex items-start gap-2 text-[13px]">
+        <input type="checkbox" className="mt-0.5 accent-[var(--ant-accent)]" checked={revokePasskeys} onChange={(e) => setRevokePasskeys(e.target.checked)} />
+        <span>
+          Supprimer aussi toutes les passkeys
+          <span className="block text-[12px] text-subtle">Si un appareil a pu être compromis : tu en ajouteras de nouvelles ensuite.</span>
+        </span>
+      </label>
       <button type="submit" className="btn" disabled={!current || strength.score === 0 || next !== confirm || change.isPending}>
         {change.isPending && <Spinner />}
         Changer le mot de passe
@@ -74,14 +87,27 @@ function Passkeys() {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const [name, setName] = useState(() => (typeof navigator !== 'undefined' ? defaultPasskeyName() : ''));
+  const [asking, setAsking] = useState(false);
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const closeAsk = () => {
+    setAsking(false);
+    setPassword('');
+    setError(null);
+  };
   const add = useMutation({
-    mutationFn: () => registerPasskey(name.trim() || defaultPasskeyName()),
+    mutationFn: () => registerPasskey(name.trim() || defaultPasskeyName(), password),
     onSuccess: () => {
+      closeAsk();
       void qc.invalidateQueries({ queryKey: qk.passkeys });
       void qc.invalidateQueries({ queryKey: qk.authState });
       toast.success('Passkey ajoutée');
     },
-    onError: (err) => toast.fromError(err, 'Passkey non ajoutée'),
+    // Shown in the dialog: a wrong password is typed again there, a cancelled device prompt is retried as is.
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 401) setPassword('');
+      setError(errorMessage(err));
+    },
   });
   const remove = useMutation({
     mutationFn: (id: string) => del(`/api/auth/passkeys/${id}`),
@@ -131,13 +157,103 @@ function Passkeys() {
       {passkeysSupported() ? (
         <div className="flex max-w-md gap-2">
           <input className="input" aria-label="Nom de la nouvelle passkey" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} />
-          <button type="button" className="btn shrink-0" onClick={() => add.mutate()} disabled={add.isPending}>
-            {add.isPending ? <Spinner /> : <KeyRound className="size-4" />}
+          <button type="button" className="btn shrink-0" onClick={() => setAsking(true)} disabled={add.isPending}>
+            <KeyRound className="size-4" />
             Ajouter une passkey
           </button>
         </div>
       ) : (
         <p className="text-[12.5px] text-subtle">Ce navigateur ne gère pas les passkeys.</p>
+      )}
+      <Modal
+        open={asking}
+        onClose={closeAsk}
+        title="Ajouter une passkey"
+        footer={
+          <>
+            <button type="button" className="btn" onClick={closeAsk}>
+              Annuler
+            </button>
+            <button type="submit" form="add-passkey" className="btn btn-primary" disabled={!password || add.isPending}>
+              {add.isPending ? <Spinner className="size-4 text-accent-fg" /> : <KeyRound className="size-4" />}
+              Continuer
+            </button>
+          </>
+        }
+      >
+        <form
+          id="add-passkey"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setError(null);
+            add.mutate();
+          }}
+          className="space-y-3"
+        >
+          {error && <div className="text-[13px] text-danger">{error}</div>}
+          <p className="text-[13px] text-muted">
+            Une passkey ouvre Ant sans mot de passe ni code : confirme d’abord que c’est bien toi. Ton appareil te demandera ensuite Face ID,
+            Touch ID, Windows Hello ou ta clé de sécurité.
+          </p>
+          <Field label="Mot de passe actuel" htmlFor="passkey-password">
+            <input
+              id="passkey-password"
+              data-autofocus
+              type="password"
+              className="input"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </Field>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
+/** Strips the IPv4-mapped IPv6 prefix (::ffff:192.168.1.20 → 192.168.1.20), as TRUST_PROXY expects it. */
+export function plainAddress(address: string): string {
+  return address.replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/i, '');
+}
+
+/** What Ant sees of the connection: the proxy's exact address to put in TRUST_PROXY (README § 7). */
+export function ProxyAddress() {
+  const network = useQuery({ queryKey: ['system', 'network'], queryFn: () => get<NetworkInfoDTO>('/api/system/network') });
+  if (network.isPending) return <Spinner />;
+  if (network.isError) return <ErrorBlock error={network.error} onRetry={() => void network.refetch()} />;
+  const n = network.data;
+  const peer = n.peerAddress ? plainAddress(n.peerAddress) : null;
+  const exact = !!peer && n.trustProxy.split(',').some((v) => plainAddress(v.trim()) === peer);
+  return (
+    <div className="max-w-xl space-y-2">
+      <div className="text-[13px] font-semibold">Adresse du proxy</div>
+      <div className="rounded-[12px] border border-line px-3 py-1">
+        <KeyValue label="Adresse du proxy vue par Ant">
+          <span className="mono">{peer ?? 'inconnue'}</span>
+        </KeyValue>
+        <KeyValue label="Ton adresse retenue">
+          <span className="mono">{plainAddress(n.clientIp)}</span>
+        </KeyValue>
+        <KeyValue label="TRUST_PROXY">
+          <span className="mono break-all">{n.trustProxy}</span>
+        </KeyValue>
+      </div>
+      {n.trustAll ? (
+        <div role="alert" className="rounded-[8px] border border-danger/40 bg-danger-soft px-3 py-2 text-[13px]">
+          <span className="font-semibold text-danger">TRUST_PROXY=true : </span>
+          n’importe quel client peut choisir son adresse IP, contourner la limite des tentatives de connexion et fausser l’Audit. Mets{' '}
+          {peer ? <span className="mono">TRUST_PROXY={peer}</span> : 'l’adresse du proxy'} dans <span className="mono">.env</span>, puis{' '}
+          <span className="mono">docker compose up -d web</span>.
+        </div>
+      ) : exact ? (
+        <p className="text-[12.5px] text-muted">TRUST_PROXY désigne exactement ce proxy : seule son adresse peut fixer celle des clients.</p>
+      ) : (
+        <p className="text-[12.5px] text-muted">
+          Pour que ni les autres appareils du réseau local ni l’ordinateur des agents ne puissent choisir leur adresse, mets{' '}
+          {peer ? <span className="mono">TRUST_PROXY={peer}</span> : 'l’adresse exacte du proxy'} dans <span className="mono">.env</span>, puis{' '}
+          <span className="mono">docker compose up -d web</span>. Ton adresse retenue doit rester la tienne, pas celle du proxy.
+        </p>
       )}
     </div>
   );
@@ -261,7 +377,7 @@ function RegenerateRecoveryCodes() {
 
 export function SecuritySection() {
   return (
-    <SettingsSection id="securite" title="Sécurité" description="Mot de passe, passkeys, sessions ouvertes et codes de secours.">
+    <SettingsSection id="securite" title="Sécurité" description="Mot de passe, passkeys, sessions ouvertes, codes de secours et adresse du proxy.">
       <ChangePassword />
       <div className="h-px bg-line" />
       <Passkeys />
@@ -269,6 +385,8 @@ export function SecuritySection() {
       <Sessions />
       <div className="h-px bg-line" />
       <RegenerateRecoveryCodes />
+      <div className="h-px bg-line" />
+      <ProxyAddress />
     </SettingsSection>
   );
 }

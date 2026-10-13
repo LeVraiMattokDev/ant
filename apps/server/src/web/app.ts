@@ -19,6 +19,7 @@ import { knowledgeRoutes } from './routes/knowledge';
 import { quotaRoutes } from './routes/quota';
 import { routineRoutes } from './routes/routines';
 import { systemRoutes } from './routes/system';
+import { registerModuleRoutes, startWebModules } from './modules';
 import { loadSession } from './session';
 import { SessionSockets } from './session-sockets';
 import { realtimeRoutes, type RealtimeHub } from './ws';
@@ -33,6 +34,8 @@ declare module 'fastify' {
 }
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+/** /healthz answers 503 when the database has not answered `select 1` within this delay. */
+const HEALTHZ_DB_TIMEOUT_MS = 3_000;
 
 /**
  * Which peers may set the client address through X-Forwarded-For (passed to proxy-addr by Fastify):
@@ -162,13 +165,33 @@ export async function buildApp(deps: WebDeps, opts: { serveUi?: boolean; rpc?: P
   await approvalRoutes(app, deps);
   await quotaRoutes(app, deps);
   await systemRoutes(app, deps);
+  // Feature modules (web/modules/*): each team registers its routes in its own module file.
+  await registerModuleRoutes(app, deps);
   // Every session-bound WebSocket (realtime, terminal, VNC) closes when its session ends.
   const sessionSockets = new SessionSockets(deps.ctx, deps.session);
   app.addHook('onClose', async () => sessionSockets.stop());
   await computerRoutes(app, deps, sessionSockets);
   const hub = await realtimeRoutes(app, deps, sessionSockets);
+  const stopModules = await startWebModules(deps, hub);
+  app.addHook('onClose', stopModules);
 
-  app.get('/healthz', { config: { public: true } }, async () => ({ ok: true }));
+  // Container healthcheck (and an optional external probe): healthy only while the database answers.
+  app.get('/healthz', { config: { public: true } }, async (_req, reply) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        deps.ctx.sql`select 1`,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('timeout')), HEALTHZ_DB_TIMEOUT_MS);
+        }),
+      ]);
+      return { ok: true };
+    } catch {
+      return reply.code(503).send({ ok: false, error: 'database_unreachable' });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
 
   const uiDist = deps.cfg.UI_DIST;
   if (opts.serveUi !== false && existsSync(uiDist)) {

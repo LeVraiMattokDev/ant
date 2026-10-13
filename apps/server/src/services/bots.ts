@@ -96,6 +96,7 @@ export async function createBot(ctx: Ctx, input: BotInput): Promise<BotDTO> {
         quietHours: input.quietHours ?? null,
         apiDailyCapUsd: input.apiDailyCapUsd ?? null,
         paused: input.paused ?? false,
+        completionPush: input.completionPush ?? null,
       })
       .returning();
     if (!bot) throw new Error('insert bot failed');
@@ -142,6 +143,7 @@ export async function updateBot(ctx: Ctx, id: string, input: Partial<BotInput>):
       quietHours: input.quietHours === undefined ? current.quietHours : input.quietHours,
       apiDailyCapUsd: input.apiDailyCapUsd === undefined ? current.apiDailyCapUsd : input.apiDailyCapUsd,
       paused: input.paused ?? current.paused,
+      completionPush: input.completionPush === undefined ? current.completionPush : input.completionPush,
       updatedAt: new Date(),
     })
     .where(eq(bots.id, id))

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { AppSettings, ComputeSource, EffortLevel, RunOrigin, RunPriority } from '@ant/shared';
+import type { AppSettings, ComputeSource, EffortLevel, RunOrigin, RunPriority, UsagePurpose } from '@ant/shared';
 import { audit } from '../lib/audit';
-import { markSubscriptionLimited, patchComputeState, recordRateLimitEvent, recordUsage, type RateLimitInfo, type UsageRecord } from '../services/quota';
+import { markSubscriptionLimited, patchComputeState, recordRateLimitEvent, recordUsage, sumUsage, type RateLimitInfo, type UsageRecord } from '../services/quota';
+import { addRunUsage } from '../services/runs';
 import { checkBudgetAlerts, reportAllPaused } from './alerts';
 import { buildAgentEnv, decideCompute, releaseApiBudget } from './compute';
 import type { WorkerDeps } from './deps';
@@ -19,6 +20,15 @@ export interface OneShotRequest {
   origin: RunOrigin;
   botId: string | null;
   botDailyCapUsd?: number | null;
+  /** What the call is for (`run_model_usage.purpose`, cost by origin on the Quota screen). */
+  purpose: UsagePurpose;
+  /**
+   * Run on whose behalf the call is made (e.g. web_extract from a bot's tool): the usage rows carry its id, and its
+   * cost and tokens are added to the run's totals (RunDTO.costUsd, cost of the answer, most expensive runs).
+   */
+  runId?: string | null;
+  /** Routine the call belongs to (cost by routine). */
+  routineId?: string | null;
 }
 
 /** API budget granted (and reserved) for one structured call: no tools, at most 4 turns of a small model. */
@@ -60,7 +70,8 @@ async function oneShotAttempt<T>(
     { key: reservation, capUsd: ONE_SHOT_MAX_BUDGET_USD },
   );
   if (decision.source === 'paused') {
-    if (req.priority !== 'background' && !decision.heldByInFlight) await reportAllPaused(deps, settings, decision.reason);
+    // Urgent (through quiet hours) only when the owner is waiting for it; otherwise the notice waits for the morning.
+    if (req.priority !== 'background' && !decision.heldByInFlight) await reportAllPaused(deps, settings, decision.reason, { urgent: req.origin === 'user' });
     return { ok: false, reason: decision.reason, paused: true };
   }
   const source = decision.source;
@@ -112,8 +123,10 @@ async function oneShotAttempt<T>(
       } else if (msg.type === 'result') {
         gotResult = true;
         usage = Object.entries(msg.modelUsage ?? {}).map(([model, u]) => ({
-          runId: null,
+          runId: req.runId ?? null,
           botId: req.botId,
+          purpose: req.purpose,
+          routineId: req.routineId ?? null,
           source,
           model: u.canonicalModel ?? model,
           inputTokens: u.inputTokens,
@@ -133,11 +146,14 @@ async function oneShotAttempt<T>(
     if (!abort.signal.aborted && !gotResult) error = (err as Error).message;
   }
   await recordUsage(deps.ctx, usage, settings.timezone);
+  // Attributed to the run it was made for: its cost shows on the answer and among the most expensive runs.
+  if (req.runId && usage.length > 0) await addRunUsage(deps.ctx, req.runId, sumUsage(usage));
   await checkBudgetAlerts(deps, settings);
   await audit(deps.ctx.db, {
     actor: 'system',
     event: 'oneshot',
-    detail: { label: req.label, model: req.model, source, costUsd: cost, error },
+    runId: req.runId ?? null,
+    detail: { label: req.label, purpose: req.purpose, model: req.model, source, costUsd: cost, error },
     outcome: error ? 'error' : limited ? 'switch' : 'ok',
   });
   if (limited) return 'switch';

@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { ComponentType } from 'react';
 import { Brain, ClipboardCheck, Gauge, Home, LogOut, Monitor, Moon, Plus, ScrollText, Search, Settings, Sun } from 'lucide-react';
+import { FeatureBoundary, FeatureRailActions, featureNav, type FeatureNavItem } from '../../features';
 import { usePendingApprovals } from '../../lib/queries';
 import { useTheme } from '../../lib/theme';
 import { useWsStatus } from '../../lib/ws';
@@ -36,6 +37,12 @@ function RailLink({ item }: { item: RailItem }) {
       ) : null}
     </Link>
   );
+}
+
+/** A feature module's rail entry: its badge hook runs in this component. */
+function FeatureRailLink({ item }: { item: FeatureNavItem }) {
+  const badge = item.useBadge?.() ?? 0;
+  return <RailLink item={{ to: item.to, label: item.label, icon: item.icon, badge }} />;
 }
 
 function OwnerMenu() {
@@ -133,7 +140,14 @@ export function IconRail() {
       {items.map((it) => (
         <RailLink key={it.to} item={it} />
       ))}
+      {featureNav('rail').map((it) => (
+        // A badge hook that throws only loses its badge: the entry and the rail stay.
+        <FeatureBoundary key={it.to} module={it.to} slot="nav" fallback={<RailLink item={{ to: it.to, label: it.label, icon: it.icon }} />}>
+          <FeatureRailLink item={it} />
+        </FeatureBoundary>
+      ))}
       <div className="mt-auto flex flex-col items-center gap-2">
+        <FeatureRailActions />
         <Link
           to="/settings"
           data-tip="Réglages"

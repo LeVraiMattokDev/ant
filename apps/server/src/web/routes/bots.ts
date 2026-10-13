@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { EFFORT_LEVELS, timeRangeSchema, type BotInput } from '@ant/shared';
+import { COMPLETION_PUSH_MODES, EFFORT_LEVELS, timeRangeSchema, type BotInput } from '@ant/shared';
 import { audit } from '../../lib/audit';
 import { enqueue } from '../../lib/jobs';
 import { archiveBot, createBot, getBot, listBots, updateBot } from '../../services/bots';
@@ -22,7 +22,8 @@ const permissions = z
   })
   .partial();
 
-const botInput = z.object({
+/** Body of POST /api/bots (POST /api/bots/batch validates each bot with it too). */
+export const botInputSchema = z.object({
   name: z.string().trim().min(1).max(60),
   slug: z.string().optional(),
   avatar: z.string().max(16).optional(),
@@ -36,6 +37,7 @@ const botInput = z.object({
   quietHours: timeRange.optional(),
   apiDailyCapUsd: z.number().min(0).max(10_000).nullable().optional(),
   paused: z.boolean().optional(),
+  completionPush: z.enum(COMPLETION_PUSH_MODES).nullable().optional(),
 });
 
 export async function botRoutes(app: FastifyInstance, deps: WebDeps): Promise<void> {
@@ -44,14 +46,14 @@ export async function botRoutes(app: FastifyInstance, deps: WebDeps): Promise<vo
   app.get('/api/bots', async () => listBots(ctx));
 
   app.post('/api/bots', async (req) => {
-    const input = botInput.parse(req.body) as BotInput;
+    const input = botInputSchema.parse(req.body) as BotInput;
     const bot = await createBot(ctx, input);
     await audit(ctx.db, { actor: 'owner', event: 'bot.create', detail: { id: bot.id, slug: bot.slug }, ip: req.ip });
     return bot;
   });
 
   app.patch<{ Params: { id: string } }>('/api/bots/:id', async (req) => {
-    const input = botInput.partial().parse(req.body) as Partial<BotInput>;
+    const input = botInputSchema.partial().parse(req.body) as Partial<BotInput>;
     const bot = await updateBot(ctx, req.params.id, input);
     await audit(ctx.db, { actor: 'owner', event: 'bot.update', detail: { id: bot.id, changes: input }, ip: req.ip });
     return bot;

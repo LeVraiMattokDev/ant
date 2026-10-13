@@ -77,6 +77,10 @@ export function SetupPage() {
   const [codes, setCodes] = useState<string[]>([]);
   const [acknowledged, setAcknowledged] = useState(false);
   const [passkeyName, setPasskeyName] = useState('');
+  // Adding a passkey asks for the password again: the one chosen above is kept in memory for that last step only.
+  // After a reload in the middle of the setup it is gone, and the passkey step asks for it.
+  const [enrolPassword, setEnrolPassword] = useState('');
+  const [enrolPasswordKept, setEnrolPasswordKept] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [secretCopied, setSecretCopied] = useState(false);
@@ -121,6 +125,8 @@ export function SetupPage() {
         /* resume after reload will not be possible */
       }
       setTotp(res);
+      setEnrolPassword(password);
+      setEnrolPasswordKept(true);
       setPassword('');
       setConfirm('');
       setStep('totp');
@@ -169,17 +175,25 @@ export function SetupPage() {
   };
 
   const finish = async () => {
+    setEnrolPassword('');
+    setEnrolPasswordKept(false);
     await qc.invalidateQueries({ queryKey: qk.authState });
     navigate('/', { replace: true });
   };
 
-  const addPasskey = async () => {
+  const addPasskey = async (e?: FormEvent) => {
+    e?.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      await registerPasskey(passkeyName.trim() || defaultPasskeyName());
+      await registerPasskey(passkeyName.trim() || defaultPasskeyName(), enrolPassword);
       await finish();
     } catch (err) {
+      // A wrong password (typed after a reload) is asked again.
+      if (err instanceof ApiError && err.status === 401) {
+        setEnrolPassword('');
+        setEnrolPasswordKept(false);
+      }
       setError(errorMessage(err));
     } finally {
       setBusy(false);
@@ -350,21 +364,37 @@ export function SetupPage() {
         )}
 
         {step === 'passkey' && (
-          <div className="space-y-4">
+          <form onSubmit={(e) => void addPasskey(e)} className="space-y-4">
             <div>
               <label className="label" htmlFor="passkey-name">
                 Nom de cet appareil
               </label>
               <input id="passkey-name" className="input" value={passkeyName} onChange={(e) => setPasskeyName(e.target.value)} maxLength={60} />
             </div>
-            <button type="button" className="btn btn-primary w-full" onClick={() => void addPasskey()} disabled={busy}>
+            {!enrolPasswordKept && (
+              <div>
+                <label className="label" htmlFor="passkey-password">
+                  Ton mot de passe
+                </label>
+                <input
+                  id="passkey-password"
+                  type="password"
+                  className="input"
+                  autoComplete="current-password"
+                  value={enrolPassword}
+                  onChange={(e) => setEnrolPassword(e.target.value)}
+                />
+                <div className="help">Celui choisi à la première étape : il confirme que c’est bien toi qui ajoutes cette passkey.</div>
+              </div>
+            )}
+            <button type="submit" className="btn btn-primary w-full" disabled={busy || !enrolPassword}>
               {busy ? <Spinner className="size-4 text-accent-fg" /> : <KeyRound className="size-4" />}
               Ajouter une passkey
             </button>
             <button type="button" className="btn btn-ghost w-full" onClick={() => void finish()} disabled={busy}>
               Plus tard, ouvrir Ant
             </button>
-          </div>
+          </form>
         )}
       </div>
     </AuthLayout>

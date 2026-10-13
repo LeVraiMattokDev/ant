@@ -18,6 +18,7 @@ import {
   Sun,
   Users,
 } from 'lucide-react';
+import { FeatureBoundary, FeatureMobileMenuActions, featureNav, type FeatureNavItem } from '../../features';
 import { usePendingApprovals } from '../../lib/queries';
 import { useTheme } from '../../lib/theme';
 import { MenuItem, MenuSeparator, Popover } from '../Popover';
@@ -39,6 +40,16 @@ const MORE: { to: string; label: string; icon: ComponentType<{ className?: strin
   { to: '/settings', label: 'Réglages', icon: Settings },
 ];
 
+/** A feature module's « Plus » entry: its badge hook runs in this component. */
+function FeatureMenuLink({ item, onSelect }: { item: FeatureNavItem; onSelect: () => void }) {
+  const badge = item.useBadge?.() ?? 0;
+  return (
+    <MenuItem icon={<item.icon />} hint={badge > 0 ? (badge > 99 ? '99+' : String(badge)) : undefined} onSelect={onSelect}>
+      {item.label}
+    </MenuItem>
+  );
+}
+
 /** Bottom tab bar replacing the icon rail on phones. */
 export function MobileTabBar() {
   const { data: pending } = usePendingApprovals();
@@ -48,7 +59,8 @@ export function MobileTabBar() {
   const [theme, setTheme] = useTheme();
   const logout = useLogout();
   const { openNewChannel } = useShell();
-  const moreActive = MORE.some((m) => pathname.startsWith(m.to));
+  const featureMore = featureNav('more');
+  const moreActive = [...MORE, ...featureMore].some((m) => pathname.startsWith(m.to));
 
   return (
     <nav
@@ -100,6 +112,27 @@ export function MobileTabBar() {
                 {m.label}
               </MenuItem>
             ))}
+            {featureMore.map((m) => {
+              const onSelect = () => {
+                close();
+                navigate(m.to);
+              };
+              // A badge hook that throws only loses its badge: the entry and the menu stay.
+              return (
+                <FeatureBoundary
+                  key={m.to}
+                  module={m.to}
+                  slot="nav"
+                  fallback={
+                    <MenuItem icon={<m.icon />} onSelect={onSelect}>
+                      {m.label}
+                    </MenuItem>
+                  }
+                >
+                  <FeatureMenuLink item={m} onSelect={onSelect} />
+                </FeatureBoundary>
+              );
+            })}
             <MenuItem
               icon={<Users />}
               onSelect={() => {
@@ -109,6 +142,7 @@ export function MobileTabBar() {
             >
               Nouvelle équipe
             </MenuItem>
+            <FeatureMobileMenuActions close={close} />
             <MenuSeparator />
             <MenuItem
               icon={theme === 'dark' ? <Sun /> : <Moon />}

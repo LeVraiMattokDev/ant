@@ -7,6 +7,7 @@ import type {
   Options,
   Query,
   SDKMessage,
+  SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { and, desc, eq, gt, isNotNull, isNull, ne, sql as dsql } from 'drizzle-orm';
 import {
@@ -22,16 +23,28 @@ import {
   type ComputeSource,
   type RunOrigin,
   type SubagentTier,
+  type UsagePurpose,
 } from '@ant/shared';
 import { agentSessions, auditLog, bots, messages, runs } from '../db/schema';
 import { audit, botActor } from '../lib/audit';
+import { HttpError } from '../lib/errors';
 import { getSettings } from '../lib/settings';
 import { activeBots, type BotRow } from '../services/bots';
 import { channelBotIds, getChannel, type ChannelRow } from '../services/channels';
 import { createMessage, getMessage, updateMessage, type MessageRow } from '../services/messages';
 import { pinnedMemoryBlock } from '../services/memory';
-import { markSubscriptionLimited, patchComputeState, recordRateLimitEvent, recordUsage, type RateLimitInfo, type UsageRecord } from '../services/quota';
-import { getRun, patchRunPayload, requestRun, updateRun, type RunRow } from '../services/runs';
+import { markSubscriptionLimited, patchComputeState, recordRateLimitEvent, recordUsage, sumUsage, type RateLimitInfo, type UsageRecord } from '../services/quota';
+import {
+  addRunUsage,
+  chainStartedAt,
+  closeStrandedRun,
+  effectiveTrigger,
+  getRun,
+  patchRunPayload,
+  requestRun,
+  updateRun,
+  type RunRow,
+} from '../services/runs';
 import { openTasksSummary } from '../services/tasks';
 import type { Ctx } from '../services/context';
 import { publish } from '../lib/events';
@@ -40,8 +53,18 @@ import { checkBudgetAlerts, clearAllPaused, reportAllPaused } from './alerts';
 import { buildAgentEnv, decideCompute, releaseApiBudget, type BudgetReservation, type DecisionRequest, type WorkerComputeDecision } from './compute';
 import type { WorkerDeps } from './deps';
 import { performHandoff } from './handoff';
+import {
+  moduleBuildPrompt,
+  moduleDescribeTrigger,
+  moduleSilentRun,
+  moduleSystemPromptSections,
+  moduleToolActivity,
+  moduleUserMessage,
+  runAfterRunHooks,
+  type FinishedRun,
+} from './modules';
 import { SUBAGENT_PROMPTS, runContextBlock, sessionSystemPrompt, staticSystemPrompt, systemPromptParts } from './prompt';
-import type { RunContext } from './run-context';
+import type { RunContext, RunOutputs } from './run-context';
 import { LIGHT_SUBAGENT_TOOLS, createAntServer, mcpToolName } from './tools';
 
 export type RunOutcome = { outcome: 'done' | 'cancelled' | 'error' } | { outcome: 'deferred'; until: Date; reason?: string };
@@ -103,10 +126,77 @@ const TOOL_ACTIVITY: Record<string, string> = {
 
 function activityFor(toolName: string): string {
   const short = toolName.startsWith('mcp__') ? toolName.split('__').pop()! : toolName;
-  return TOOL_ACTIVITY[short] ?? `utilise ${short}`;
+  return TOOL_ACTIVITY[short] ?? moduleToolActivity(short) ?? `utilise ${short}`;
+}
+
+/** Payload keys a follow-up run (after the step limit) keeps from the run it continues. */
+const CONTINUATION_KEYS = ['routineId', 'reportTo', 'followupId', 'watchId', 'draftId', 'depth'] as const;
+
+/** What the run's model calls were for (`run_model_usage.purpose`): its trigger, or the trigger of the run it continues. */
+export function usagePurposeOf(run: Pick<RunRow, 'trigger' | 'payload'>): UsagePurpose {
+  // Every run trigger is also a usage purpose.
+  return effectiveTrigger(run) satisfies UsagePurpose;
+}
+
+/** The run's conversation, or null when it was archived; any other error (connection lost…) propagates: the job retries. */
+async function channelOrNull(ctx: Ctx, channelId: string): Promise<ChannelRow | null> {
+  try {
+    return await getChannel(ctx, channelId);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/** Silent runs post no reply up front: heartbeats (nudges go through a tool) and those a feature module answers itself. */
+async function isSilentRun(deps: WorkerDeps, run: RunRow): Promise<boolean> {
+  return run.trigger === 'heartbeat' || (await moduleSilentRun(deps, run));
+}
+
+/** Runs the feature modules' afterRun hooks on a final state, then records that they ran. */
+async function finishHooks(deps: WorkerDeps, settings: AppSettings, finished: FinishedRun): Promise<void> {
+  await runAfterRunHooks(deps, settings, finished);
+  await patchRunPayload(deps.ctx, finished.run.id, { afterRunAt: new Date().toISOString() });
+}
+
+/**
+ * The afterRun hooks of a run closed without reaching the normal end of executeRun: cancelled while queued or paused
+ * (owner, emergency stop, newer routine occurrence), bot paused or archived, conversation archived, autonomous work
+ * dropped for lack of compute, job failed for good, orphan. No answer, no attachment. Does nothing for a run still
+ * active, or whose hooks already ran.
+ */
+export async function afterRunClosed(
+  deps: WorkerDeps,
+  run: RunRow,
+  known: { settings?: AppSettings; bot?: BotRow; channel?: ChannelRow | null } = {},
+): Promise<void> {
+  const status = run.status;
+  if (run.payload.afterRunAt || (status !== 'done' && status !== 'error' && status !== 'cancelled')) return;
+  const bot = known.bot ?? (await deps.ctx.db.query.bots.findFirst({ where: eq(bots.id, run.botId) }));
+  if (!bot) return;
+  const settings = known.settings ?? (await getSettings(deps.ctx.db));
+  const channel = known.channel !== undefined ? known.channel : run.channelId ? await channelOrNull(deps.ctx, run.channelId) : null;
+  const startedAt = chainStartedAt(run);
+  await finishHooks(deps, settings, {
+    run,
+    bot,
+    channel,
+    status,
+    trigger: effectiveTrigger(run),
+    finalText: '',
+    error: run.error,
+    silent: await isSilentRun(deps, run),
+    responseMessageId: run.responseMessageId,
+    attachments: [],
+    startedAt,
+    durationMs: Math.max(0, (run.finishedAt ?? new Date()).getTime() - startedAt.getTime()),
+    continued: false,
+  });
 }
 
 function describeTrigger(run: RunRow): string {
+  const custom = moduleDescribeTrigger(run);
+  if (custom) return custom;
   switch (run.trigger) {
     case 'user':
       return 'le propriétaire t’écrit';
@@ -122,6 +212,12 @@ function describeTrigger(run: RunRow): string {
       return 'résumé quotidien';
     case 'heartbeat':
       return 'heartbeat (revue proactive)';
+    case 'followup':
+      return 'suivi que tu t’étais programmé (ou que le propriétaire t’a confié)';
+    case 'watch':
+      return 'une page ou un flux que tu surveilles a changé';
+    case 'draft':
+      return 'le propriétaire a modifié ou refusé un de tes brouillons';
     default:
       return run.payload.continuation ? 'suite automatique d’une tâche longue (limite d’étapes atteinte)' : 'système';
   }
@@ -227,6 +323,8 @@ function buildPrompt(run: RunRow, conversation: ConversationContext | null, inte
     head = `${title}\n${conversation.text}\n\n---\n`;
   }
   if (interruptedNote) head = `${head}${interruptedNote}\n\n`;
+  const custom = moduleBuildPrompt(run, head);
+  if (custom !== null) return custom;
   switch (run.trigger) {
     case 'user':
     case 'mention':
@@ -280,8 +378,7 @@ function hasUsage(totals: UsageTotals): boolean {
 function usageDelta(
   current: Record<string, ModelUsage> | null,
   baseline: UsageTotals | null,
-  runId: string,
-  botId: string,
+  run: Pick<RunRow, 'id' | 'botId' | 'trigger' | 'payload'>,
   source: ComputeSource,
 ): UsageRecord[] {
   if (!current) return [];
@@ -292,8 +389,10 @@ function usageDelta(
     const reset = !b || cur.i < b.i || cur.o < b.o || cur.cr < b.cr || cur.cw < b.cw || cur.c + 1e-9 < b.c;
     const d = reset ? cur : { i: cur.i - b.i, o: cur.o - b.o, cr: cur.cr - b.cr, cw: cur.cw - b.cw, c: cur.c - b.c };
     return {
-      runId,
-      botId,
+      runId: run.id,
+      botId: run.botId,
+      purpose: usagePurposeOf(run),
+      routineId: typeof run.payload.routineId === 'string' ? run.payload.routineId : null,
       source,
       model: u.canonicalModel ?? key,
       inputTokens: d.i,
@@ -506,7 +605,10 @@ interface ResumeHint {
 export interface PreparedRun {
   rc: RunContext;
   options: Options;
+  /** Text of the request (also what is sent, unless a feature module turned it into `input`). */
   prompt: string;
+  /** What is sent to the SDK: the text, or SDK user messages built by a feature module (images, PDF). */
+  input: string | AsyncIterable<SDKUserMessage>;
   session: SessionRow;
   /** Read watermark of the conversation shown in the prompt (null when only a resume note was sent). */
   contextAt: Date | null;
@@ -521,6 +623,8 @@ interface PrepareInput {
   lostSession: boolean;
   /** Added to the full request when an interrupted run is not continued with a short note. */
   interruptedNote: string | null;
+  /** Shared by every attempt of the run. */
+  outputs: RunOutputs;
 }
 
 async function prepare(deps: WorkerDeps, run: RunRow, bot: BotRow, channel: ChannelRow | null, settings: AppSettings, input: PrepareInput): Promise<PreparedRun> {
@@ -544,6 +648,7 @@ async function prepare(deps: WorkerDeps, run: RunRow, bot: BotRow, channel: Chan
       await updateRun(deps.ctx, run.id, { activity });
       await publish(deps.ctx.sql, { type: 'bot.updated', botId: bot.id });
     },
+    outputs: input.outputs,
   };
 
   const { server, toolNames } = createAntServer(rc);
@@ -570,6 +675,7 @@ async function prepare(deps: WorkerDeps, run: RunRow, bot: BotRow, channel: Chan
     permissions,
     otherBots: all.filter((b) => b.id !== bot.id).map((b) => ({ slug: b.slug, name: b.name, role: b.role })),
     pinnedMemory: await pinnedMemoryBlock(deps.ctx, bot.id),
+    extraSections: moduleSystemPromptSections(bot, permissions),
   });
   const sessionPart = sessionSystemPrompt(session.summary);
 
@@ -600,6 +706,9 @@ async function prepare(deps: WorkerDeps, run: RunRow, bot: BotRow, channel: Chan
     openTasks: await openTasksSummary(deps.ctx, bot.id),
   });
   const prompt = `${runContext}\n\n---\n\n${body}`;
+  const sdkInput = (await moduleUserMessage(rc, prompt)) ?? prompt;
+  // On the subscription, an optional cap in API-equivalent dollars keeps a runaway run from draining the 5-hour window.
+  const budget = source === 'api' ? maxBudgetUsd : settings.perRunSubscriptionCapUsd > 0 ? settings.perRunSubscriptionCapUsd : null;
 
   const options: Options = {
     model: run.model,
@@ -622,10 +731,10 @@ async function prepare(deps: WorkerDeps, run: RunRow, bot: BotRow, channel: Chan
     abortController: abort,
     maxTurns: isHeartbeat ? 15 : 80,
     ...(resumeId ? { resume: resumeId } : {}),
-    ...(source === 'api' && maxBudgetUsd !== null ? { maxBudgetUsd } : {}),
+    ...(budget !== null ? { maxBudgetUsd: budget } : {}),
     ...(deps.cfg.CLAUDE_CODE_EXECUTABLE ? { pathToClaudeCodeExecutable: deps.cfg.CLAUDE_CODE_EXECUTABLE } : {}),
   };
-  return { rc, options, prompt, session, contextAt };
+  return { rc, options, prompt, input: sdkInput, session, contextAt };
 }
 
 interface StreamTarget {
@@ -670,9 +779,11 @@ async function consume(deps: WorkerDeps, prepared: PreparedRun, source: ComputeS
     if (!target.messageId || !target.channelId || pending.length === 0) return;
     if (!force && Date.now() - lastFlush < 150) return;
     const delta = pending;
+    // Where this chunk starts in the message text: lets the UI apply chunks idempotently and notice a gap.
+    const offset = liveText.length - pending.length;
     pending = '';
     lastFlush = Date.now();
-    await publish(deps.ctx.sql, { type: 'message.delta', messageId: target.messageId, channelId: target.channelId, delta });
+    await publish(deps.ctx.sql, { type: 'message.delta', messageId: target.messageId, channelId: target.channelId, delta, offset });
     if (Date.now() - lastSave > 3000) {
       lastSave = Date.now();
       await deps.ctx.db.update(messages).set({ content: liveText, updatedAt: new Date() }).where(eq(messages.id, target.messageId));
@@ -700,7 +811,7 @@ async function consume(deps: WorkerDeps, prepared: PreparedRun, source: ComputeS
   const onCancel = () => stop();
 
   try {
-    q = deps.query({ prompt: prepared.prompt, options: prepared.options });
+    q = deps.query({ prompt: prepared.input, options: prepared.options });
     if (cancel.aborted) stop();
     else cancel.addEventListener('abort', onCancel, { once: true });
     for await (const msg of q as AsyncIterable<SDKMessage>) {
@@ -773,7 +884,10 @@ async function consume(deps: WorkerDeps, prepared: PreparedRun, source: ComputeS
             resultText = msg.result ?? '';
             if (msg.is_error) error = resultText || 'Erreur pendant l’exécution';
           } else if (msg.subtype === 'error_max_budget_usd') {
-            error = 'Plafond de dépense de cette exécution atteint (crédits API). Relance-moi si tu veux que je continue.';
+            error =
+              source === 'api'
+                ? 'Plafond de dépense de cette exécution atteint (crédits API). Relance-moi si tu veux que je continue.'
+                : 'Plafond de cette exécution sur l’abonnement atteint (réglage « Plafond par exécution sur l’abonnement »). Relance-moi si tu veux que je continue.';
           } else if (msg.subtype === 'error_max_turns') {
             maxTurns = true;
             error = 'Nombre maximal d’étapes atteint pour cette exécution.';
@@ -809,16 +923,8 @@ async function consume(deps: WorkerDeps, prepared: PreparedRun, source: ComputeS
 async function accumulateUsage(deps: WorkerDeps, runId: string, usage: UsageRecord[], settings: AppSettings): Promise<void> {
   if (usage.length === 0) return;
   await recordUsage(deps.ctx, usage, settings.timezone);
-  const run = await getRun(deps.ctx, runId);
-  if (!run) return;
-  const sum = (k: keyof UsageRecord) => usage.reduce((acc, u) => acc + (Number(u[k]) || 0), 0);
-  await updateRun(deps.ctx, runId, {
-    costUsd: run.costUsd + sum('costUsd'),
-    inputTokens: run.inputTokens + sum('inputTokens'),
-    outputTokens: run.outputTokens + sum('outputTokens'),
-    cacheReadTokens: run.cacheReadTokens + sum('cacheReadTokens'),
-    cacheWriteTokens: run.cacheWriteTokens + sum('cacheWriteTokens'),
-  });
+  // Added in SQL: a one-off call made for this run (web_extract) may add its own cost at the same time.
+  await addRunUsage(deps.ctx, runId, sumUsage(usage));
   await checkBudgetAlerts(deps, settings);
 }
 
@@ -866,14 +972,28 @@ function isShutdown(signal: AbortSignal): boolean {
 async function executeRunInner(deps: WorkerDeps, runId: string, externalSignal: AbortSignal): Promise<RunOutcome> {
   const { ctx, log } = deps;
   const run = await getRun(ctx, runId);
-  if (!run || TERMINAL.has(run.status)) return { outcome: 'cancelled' };
+  if (!run) return { outcome: 'cancelled' };
+  if (TERMINAL.has(run.status)) {
+    // Closed while its job waited (cancelled while queued or paused, superseded, closed as stranded): the feature
+    // modules still learn its final state (handoff return…), once.
+    await afterRunClosed(deps, run);
+    return { outcome: 'cancelled' };
+  }
   const bot = await ctx.db.query.bots.findFirst({ where: eq(bots.id, run.botId) });
-  if (!bot || bot.archivedAt || bot.paused) {
+  if (!bot) return { outcome: 'cancelled' };
+  if (bot.archivedAt || bot.paused) {
     await updateRun(ctx, run.id, { status: 'cancelled', error: 'bot en pause ou archivé', finishedAt: new Date(), activity: null });
+    await afterRunClosed(deps, (await getRun(ctx, run.id)) ?? run, { bot });
     return { outcome: 'cancelled' };
   }
   const settings = await getSettings(ctx.db);
-  const channel = run.channelId ? await getChannel(ctx, run.channelId).catch(() => null) : null;
+  const channel = run.channelId ? await channelOrNull(ctx, run.channelId) : null;
+  if (run.channelId && !channel) {
+    // Its conversation was archived while it waited: nobody would see the answer, and the bot should not act for it.
+    await closeStrandedRun(ctx, run, 'cancelled', 'conversation archivée', '⚠️ Exécution annulée : conversation archivée.');
+    await afterRunClosed(deps, (await getRun(ctx, run.id)) ?? run, { settings, bot, channel: null });
+    return { outcome: 'cancelled' };
+  }
 
   // A previous attempt was interrupted (worker restart, crash, uncaught error) or paused mid-turn:
   // if its SDK session already holds the request, continue it with a note instead of replaying it.
@@ -921,6 +1041,8 @@ async function executeRunInner(deps: WorkerDeps, runId: string, externalSignal: 
   let continueAfter = false;
   /** SDK session holding this run's request, once known. */
   let runSessionId: string | null = run.sdkSessionId;
+  const outputs: RunOutputs = { attachments: [] };
+  const silent = await isSilentRun(deps, run);
 
   /** Before leaving mid-run: keep partial text (with a note), drop an empty placeholder. */
   const settlePlaceholder = async (note: string) => {
@@ -975,7 +1097,7 @@ async function executeRunInner(deps: WorkerDeps, runId: string, externalSignal: 
 
     // Text of earlier attempts stays in the message; this attempt's text follows it.
     const prefix = streamMessageId && finalText ? `${finalText}\n\n` : '';
-    if (!streamMessageId && channel && run.trigger !== 'heartbeat') {
+    if (!streamMessageId && channel && !silent) {
       const m = await createMessage(ctx, {
         channelId: channel.id,
         threadRootId: run.threadRootId,
@@ -984,7 +1106,15 @@ async function executeRunInner(deps: WorkerDeps, runId: string, externalSignal: 
         content: '',
         status: 'streaming',
         runId: run.id,
-        meta: { kind: 'chat', runId: run.id, model: run.model, effort: run.effort, computeSource: source },
+        meta: {
+          kind: 'chat',
+          runId: run.id,
+          model: run.model,
+          effort: run.effort,
+          computeSource: source,
+          // Lets the conversation show which routine wrote this answer (manual and scheduled runs, and their follow-ups).
+          ...(typeof run.payload.routineId === 'string' ? { routineId: run.payload.routineId } : {}),
+        },
       });
       streamMessageId = m.id;
       await updateRun(ctx, run.id, { responseMessageId: m.id });
@@ -993,7 +1123,7 @@ async function executeRunInner(deps: WorkerDeps, runId: string, externalSignal: 
     }
 
     const maxBudget = decision.source === 'api' ? decision.maxBudgetUsd : null;
-    const prepared = await prepare(deps, run, bot, channel, settings, { source, maxBudgetUsd: maxBudget, abort, resume, lostSession, interruptedNote });
+    const prepared = await prepare(deps, run, bot, channel, settings, { source, maxBudgetUsd: maxBudget, abort, resume, lostSession, interruptedNote, outputs });
     const resumedFrom = prepared.options.resume ?? null;
     const result = await consume(deps, prepared, source, {
       target: { messageId: streamMessageId, channelId: channel?.id ?? null },
@@ -1016,7 +1146,7 @@ async function executeRunInner(deps: WorkerDeps, runId: string, externalSignal: 
 
     // The SDK reports totals since the session began: record only this attempt's share.
     const baseline = resumedFrom ? await loadUsageBaseline(ctx, bot.id, resumedFrom) : null;
-    await accumulateUsage(deps, run.id, usageDelta(result.totals, baseline, run.id, bot.id, source), settings);
+    await accumulateUsage(deps, run.id, usageDelta(result.totals, baseline, run, source), settings);
 
     // A session whose resume keeps failing before any answer, run after run, would block the
     // conversation for good (nothing else resets it): past the limit, it is dropped like a lost one.
@@ -1116,7 +1246,13 @@ async function executeRunInner(deps: WorkerDeps, runId: string, externalSignal: 
     await updateMessage(ctx, streamMessageId, {
       content: finalError ? `${content}${content ? '\n\n' : ''}⚠️ ${finalError}` : content,
       status: finalError && !finalText ? 'error' : 'done',
-      meta: { computeSource: lastSource, costUsd: cost, model: run.model, effort: run.effort },
+      meta: {
+        computeSource: lastSource,
+        costUsd: cost,
+        model: run.model,
+        effort: run.effort,
+        ...(outputs.attachments.length ? { attachments: outputs.attachments } : {}),
+      },
     });
   }
   await updateRun(ctx, run.id, { status, error: finalError, finishedAt: new Date(), activity: null });
@@ -1130,9 +1266,14 @@ async function executeRunInner(deps: WorkerDeps, runId: string, externalSignal: 
   });
 
   if (status === 'done' && channel && finalText) await handleMentions(deps, settings, run, bot, channel, finalText);
+  const startedAt = chainStartedAt(latest ?? run);
+  /** The follow-up run; null when none could start (bot paused or archived meanwhile): then the task is over here. */
+  let continuation: Awaited<ReturnType<typeof requestRun>> = null;
   if (continueAfter) {
-    // Same conversation and session: the follow-up resumes exactly where the step limit stopped this run.
-    await requestRun(ctx, {
+    // Same conversation, session and model: the follow-up resumes exactly where the step limit stopped this run,
+    // and keeps what ties it to its origin (routine, handoff with return, followup, watch, draft) and when it began.
+    const kept = Object.fromEntries(CONTINUATION_KEYS.filter((k) => run.payload[k] !== undefined).map((k) => [k, run.payload[k]]));
+    continuation = await requestRun(ctx, {
       botId: bot.id,
       channelId: run.channelId,
       threadRootId: run.threadRootId,
@@ -1143,11 +1284,34 @@ async function executeRunInner(deps: WorkerDeps, runId: string, externalSignal: 
       chainId: run.chainId,
       hop: run.hop,
       prompt: CONTINUATION_PROMPT,
-      payload: { continuation: Number(run.payload.continuation ?? 0) + 1, continuationOf: run.id },
+      model: run.model,
+      effort: run.effort,
+      payload: {
+        ...kept,
+        continuation: Number(run.payload.continuation ?? 0) + 1,
+        continuationOf: run.id,
+        continuedTrigger: effectiveTrigger(run),
+        chainStartedAt: startedAt.toISOString(),
+      },
     });
   } else {
     await maybeRotate(deps, bot.id, run.threadKey, run.origin, settings);
   }
+  await finishHooks(deps, settings, {
+    run: (await getRun(ctx, run.id)) ?? run,
+    bot,
+    channel,
+    status,
+    trigger: effectiveTrigger(run),
+    finalText,
+    error: finalError,
+    silent,
+    responseMessageId: streamMessageId,
+    attachments: outputs.attachments,
+    startedAt,
+    durationMs: Math.max(0, Date.now() - startedAt.getTime()),
+    continued: continuation !== null,
+  });
   return { outcome: status === 'done' ? 'done' : status === 'cancelled' ? 'cancelled' : 'error' };
 }
 
@@ -1162,6 +1326,7 @@ async function pauseRun(
   // Missing a heartbeat or a digest is harmless: drop it. Everything else waits for compute.
   if (run.trigger === 'heartbeat' || run.trigger === 'digest') {
     await updateRun(ctx, run.id, { status: 'cancelled', computeReason: reason, error: `non exécuté : ${reason}`, finishedAt: new Date(), activity: null });
+    await afterRunClosed(deps, (await getRun(ctx, run.id)) ?? run, { settings });
     return { outcome: 'cancelled' };
   }
   // Autonomous work does not wait forever: replayed hours later it would act on stale instructions,
@@ -1184,6 +1349,7 @@ async function pauseRun(
     }
     await audit(ctx.db, { actor: 'system', event: 'run.finished', runId: run.id, detail: { trigger: run.trigger, reason: `aucune source de calcul pendant ${hours} h : ${reason}` }, outcome: 'cancelled' });
     await publish(ctx.sql, { type: 'bot.updated', botId: run.botId });
+    await afterRunClosed(deps, (await getRun(ctx, run.id)) ?? run, { settings });
     return { outcome: 'cancelled' };
   }
   const until = retryAt && retryAt.getTime() > Date.now() ? new Date(retryAt.getTime() + 60_000) : new Date(Date.now() + 15 * 60_000);
@@ -1205,7 +1371,8 @@ async function pauseRun(
     });
     await patchRunPayload(ctx, run.id, { pauseNotified: true, pauseMessageId: notice.id });
   }
-  if (owner.source === 'paused' && !owner.heldByInFlight) await reportAllPaused(deps, settings, owner.reason);
+  // Urgent (through quiet hours) only when the owner is waiting for this answer; otherwise the notice waits for the morning.
+  if (owner.source === 'paused' && !owner.heldByInFlight) await reportAllPaused(deps, settings, owner.reason, { urgent: run.origin === 'user' });
   return { outcome: 'deferred', until };
 }
 

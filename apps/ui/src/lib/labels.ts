@@ -53,6 +53,9 @@ export const RUN_TRIGGER_LABELS: Record<RunTrigger, string> = {
   digest: 'Résumé',
   approval: 'Validation',
   system: 'Système',
+  followup: 'Suivi programmé',
+  watch: 'Veille',
+  draft: 'Brouillon',
 };
 
 export const APPROVAL_STATUS_LABELS: Record<ApprovalStatus, string> = {

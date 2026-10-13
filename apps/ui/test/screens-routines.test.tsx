@@ -48,6 +48,9 @@ function routine(p: Partial<RoutineDTO> & { id: string }): RoutineDTO {
     instruction: 'Fais le point',
     urgent: false,
     enabled: true,
+    proposed: false,
+    completionPush: null,
+    silentIfNothing: false,
     lastRunAt: null,
     nextRuns: [],
     createdAt: '2026-10-01T10:00:00.000Z',
@@ -150,8 +153,8 @@ describe('isProposal', () => {
     expect(isProposal(routine({ id: 'r3', enabled: true, proposed: true }))).toBe(false);
   });
 
-  it('falls back to "disabled and never run" when the server does not send the flag', () => {
-    expect(isProposal(routine({ id: 'r4', enabled: false }))).toBe(true);
-    expect(isProposal(routine({ id: 'r5', enabled: false, lastRunAt: '2026-10-01T10:00:00.000Z' }))).toBe(false);
+  it('does not guess from the history: a disabled routine never run is a proposal only when flagged', () => {
+    expect(isProposal(routine({ id: 'r4', enabled: false }))).toBe(false);
+    expect(isProposal(routine({ id: 'r5', enabled: false, proposed: true, lastRunAt: '2026-10-01T10:00:00.000Z' }))).toBe(true);
   });
 });

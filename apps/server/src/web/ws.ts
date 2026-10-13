@@ -1,13 +1,37 @@
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import WebSocket from 'ws';
-import type { ServerEvent } from '@ant/shared';
+import type { ClientEvent, ServerEvent } from '@ant/shared';
 import { runToDTO } from '../lib/dto';
 import { subscribe, type WireEvent } from '../lib/events';
 import { logger } from '../lib/logger';
 import { getMessageDTO } from '../services/messages';
 import { getRun } from '../services/runs';
 import type { WebDeps } from './deps';
+import { connectionClosed, dispatchClientEvent, type RealtimeConnection } from './modules';
 import type { SessionSockets } from './session-sockets';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Validates a browser message on /api/ws (ClientEvent); anything else is ignored. */
+export function parseClientEvent(raw: string): ClientEvent | null {
+  let msg: unknown;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof msg !== 'object' || msg === null) return null;
+  const m = msg as Record<string, unknown>;
+  if (m.type === 'ping') return { type: 'ping' };
+  if (m.type === 'focus') {
+    const channelId = m.channelId === null || m.channelId === undefined ? null : m.channelId;
+    if (channelId !== null && (typeof channelId !== 'string' || !UUID_RE.test(channelId))) return null;
+    if (typeof m.visible !== 'boolean') return null;
+    return { type: 'focus', channelId, visible: m.visible };
+  }
+  return null;
+}
 
 export interface RealtimeHub {
   broadcast(event: ServerEvent): void;
@@ -53,15 +77,32 @@ export async function realtimeRoutes(app: FastifyInstance, deps: WebDeps, sessio
     }
     sockets.add(socket);
     sessionSockets.track(socket, req.session?.id);
+    const connection: RealtimeConnection = {
+      id: randomUUID(),
+      sessionId: req.session?.id ?? null,
+      send: (event) => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
+      },
+    };
     socket.on('message', (raw) => {
-      try {
-        const msg = JSON.parse(raw.toString()) as { type?: string };
-        if (msg.type === 'ping' && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'pong' }));
-      } catch {
-        // ignore
+      // `ws` still delivers messages while the socket is CLOSING (e.g. after a revocation): drop them.
+      if (socket.readyState !== WebSocket.OPEN) return;
+      const event = parseClientEvent(raw.toString());
+      if (!event) return;
+      if (event.type === 'ping') {
+        socket.send(JSON.stringify({ type: 'pong' }));
+        return;
       }
+      // Feature modules (web/modules), e.g. presence.
+      void dispatchClientEvent(deps, connection, event);
     });
-    const forget = () => sockets.delete(socket);
+    let closed = false;
+    const forget = () => {
+      sockets.delete(socket);
+      if (closed) return;
+      closed = true;
+      void connectionClosed(deps, connection);
+    };
     socket.on('close', forget);
     socket.on('error', forget);
   });
