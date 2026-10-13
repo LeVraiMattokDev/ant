@@ -122,6 +122,16 @@ describe.skipIf(!hasDb)('web API', () => {
     expect(badOrigin.statusCode).toBe(403);
   });
 
+  it('applies auth and CSRF to percent-encoded /api paths', async () => {
+    for (const url of ['/%61pi/bots', '/%61%70%69/settings', '/%61pi/auth/sessions', '/%61pi/computer/terminal', '/%61pi/audit']) {
+      expect((await app.inject({ method: 'GET', url })).statusCode).toBe(401);
+    }
+    const reg = await app.inject({ method: 'POST', url: '/%61pi/auth/passkey/register/options', payload: {}, headers: { 'x-requested-with': 'ant', origin: ORIGIN } });
+    expect(reg.statusCode).toBe(401);
+    const csrf = await app.inject({ method: 'POST', url: '/%61pi/bots', payload: { name: 'X', role: 'x' }, headers: { cookie, origin: 'https://evil.example' } });
+    expect(csrf.statusCode).toBe(403);
+  });
+
   it('creates a bot with its DM and dispatches a message to it', async () => {
     const bot = (await post('/api/bots', { name: 'Chef de cabinet', role: 'Assistant principal', avatar: '🧭' })).json();
     expect(bot.slug).toBe('chef-de-cabinet');

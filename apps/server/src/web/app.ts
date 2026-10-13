@@ -87,7 +87,11 @@ export async function buildApp(deps: WebDeps, opts: { serveUi?: boolean; rpc?: P
   app.decorateRequest('session', null);
 
   app.addHook('onRequest', async (req, reply) => {
-    if (!req.url.startsWith('/api/')) return;
+    // Decide on the matched route pattern, not the raw URL: the router percent-decodes the path before
+    // matching, so `/%61pi/bots` reaches the `/api/bots` handler while `req.url` does not start with `/api/`.
+    // Unmatched URLs fall through to the not-found handler, which serves no data.
+    const route = req.routeOptions.url;
+    if (!route?.startsWith('/api/')) return;
     if (MUTATING.has(req.method)) {
       const requestedWith = req.headers['x-requested-with'];
       const reqOrigin = req.headers.origin;
